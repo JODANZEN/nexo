@@ -1,0 +1,33 @@
+{
+  "name": "nexo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Nexo \u2014 PropTech SaaS for Colombian Propiedad Horizontal",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "format": "prettier --write \"**/*.{ts,tsx,md}\"",
+    "db:generate": "turbo run db:generate",
+    "db:migrate": "npm run db:migrate --workspace @nexo/database"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "prettier": "^3.3.3",
+    "turbo": "^2.1.0",
+    "typescript": "^5.5.4"
+  },
+  "packageManager": "npm@11.17.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "overrides": {
+    "multer": "^2.5.0",
+    "qs": "^6.16.1"
+  }
+}

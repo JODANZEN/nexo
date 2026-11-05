@@ -1,0 +1,21 @@
+{
+  "name": "@nexo/utils",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "echo \"no tests yet\" && exit 0"
+  },
+  "dependencies": {
+    "@date-fns/tz": "^1.2.0",
+    "date-fns": "^4.1.0",
+    "decimal.js": "^10.4.3"
+  },
+  "devDependencies": {
+    "@nexo/types": "*",
+    "typescript": "^5.5.4"
+  }
+}

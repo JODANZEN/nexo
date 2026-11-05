@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/nexo_ci
+      ENCRYPTION_KEY: 0000000000000000000000000000000000000000000000000000000000000000
+      VOTE_SECRET: ci-vote-secret
+      CLERK_SECRET_KEY: sk_test_ci
+      NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: pk_test_ZXhhbXBsZS5jbGVyay5hY2NvdW50cy5kZXYk
+      NEXT_TELEMETRY_DISABLED: '1'
+      REDIS_URL: ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build shared packages
+        run: |
+          npm run build -w @nexo/database
+          npm run build -w @nexo/types
+          npm run build -w @nexo/utils
+      - name: Typecheck + build API
+        run: |
+          npm run typecheck -w @nexo/api
+          npm run build -w @nexo/api
+      - name: Build web + site
+        run: |
+          npm run build -w @nexo/web
+          npm run build -w @nexo/site
+      - name: Migrate + seed test DB
+        run: |
+          psql postgresql://postgres:postgres@localhost:5432/postgres -c "CREATE DATABASE nexo_ci"
+          npm run db:deploy -w @nexo/database
+          echo "DATABASE_URL=$DATABASE_URL" > packages/database/.env
+          npm run db:seed -w @nexo/database
+      - name: Smoke tests (billing, PQR, portería, asambleas, security, RLS)
+        working-directory: apps/api
+        run: |
+          for s in smoke smoke-phase4 smoke-phase5 smoke-phase6 smoke-security smoke-rls; do
+            echo "::group::$s"; node dist/$s.js; echo "::endgroup::"
+          done
+      - name: Dependency audit
+        run: npm audit --omit=dev --audit-level=high

@@ -1,0 +1,41 @@
+import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server';
+import { NextResponse } from 'next/server';
+
+const isPublic = createRouteMatcher(['/', '/sign-in(.*)', '/sign-up(.*)']);
+const isOnboarding = createRouteMatcher(['/onboarding(.*)']);
+const isDashboard = createRouteMatcher(['/dashboard(.*)']);
+const isPortal = createRouteMatcher(['/portal(.*)']);
+
+export default clerkMiddleware(async (auth, req) => {
+  if (isPublic(req)) return;
+
+  const { userId, sessionClaims, redirectToSignIn } = await auth();
+  if (!userId) return redirectToSignIn();
+
+  // Pull conjuntoId + role from the session token's publicMetadata (or top-level).
+  const claims = sessionClaims as Record<string, unknown> | null | undefined;
+  const meta = ((claims?.publicMetadata ?? claims?.public_metadata) ?? {}) as Record<string, unknown>;
+  const conjuntoId = meta.conjuntoId ?? claims?.conjuntoId ?? null;
+  const role = (meta.role ?? claims?.role ?? null) as string | null;
+
+  // /onboarding needs auth but NOT a conjuntoId (new users land here).
+  if (isOnboarding(req)) return;
+
+  // Everything else needs a conjuntoId — otherwise send the user to onboarding.
+  if (!conjuntoId) return NextResponse.redirect(new URL('/onboarding', req.url));
+
+  // Role-based areas: RESIDENT → /portal. ADMIN lands on /dashboard by default but
+  // may also open /portal (demo/preview of the resident experience).
+  if (role === 'RESIDENT' && isDashboard(req)) {
+    return NextResponse.redirect(new URL('/portal', req.url));
+  }
+
+  return;
+});
+
+export const config = {
+  matcher: [
+    '/((?!_next|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)',
+    '/(api|trpc)(.*)',
+  ],
+};
