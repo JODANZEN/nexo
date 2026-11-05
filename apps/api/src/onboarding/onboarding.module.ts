@@ -5,9 +5,11 @@ import { UsersController } from './users.controller';
 import { UnitsController } from './units.controller';
 import { InvitesController } from './invites.controller';
 import { InvitesService } from './invites.service';
+import { UnitsService } from './units.service';
 
 @Module({
   controllers: [ConjuntosController, UsersController, UnitsController, InvitesController],
-  providers: [OnboardingService, InvitesService],
+  providers: [OnboardingService, InvitesService, UnitsService],
+  exports: [UnitsService],
 })
 export class OnboardingModule {}

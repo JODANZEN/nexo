@@ -10,13 +10,14 @@ import { PrismaService } from '../prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
 import { normalizePhone } from '../auth/phone';
 
-export type InviteRole = 'RESIDENT' | 'GUARD' | 'ADMIN';
+export type InviteRole = 'RESIDENT' | 'GUARD' | 'ADMIN' | 'STAFF';
 export interface CreateInviteDto {
   phone: string;
   fullName?: string;
   role?: InviteRole;
   unitId?: string;
   occupancyType?: string;
+  team?: string; // STAFF only: "Mantenimiento", "Aseo"…
 }
 export interface BulkInviteRow {
   unitNumber: string;
@@ -32,7 +33,7 @@ export interface BulkResult {
   reason?: string;
 }
 
-const ROLES: InviteRole[] = ['RESIDENT', 'GUARD', 'ADMIN'];
+const ROLES: InviteRole[] = ['RESIDENT', 'GUARD', 'ADMIN', 'STAFF'];
 const MAX_BULK = 2000;
 
 /**
@@ -60,6 +61,7 @@ export class InvitesService {
         full_name: true,
         phone: true,
         role: true,
+        team: true,
         created_at: true,
         occupancies: {
           where: { ended_at: null },
@@ -73,6 +75,7 @@ export class InvitesService {
       fullName: r.full_name,
       phone: r.phone,
       role: r.role,
+      team: r.team,
       unitNumber: r.occupancies[0]?.unit.unit_number ?? null,
       occupancyType: r.occupancies[0]?.occupancy_type ?? null,
       createdAt: r.created_at,
@@ -171,8 +174,11 @@ export class InvitesService {
       data: {
         conjunto_id: conjuntoId,
         phone,
-        full_name: dto.fullName?.trim() || (role === 'GUARD' ? 'Portería' : role === 'ADMIN' ? 'Administrador' : 'Residente'),
+        full_name:
+          dto.fullName?.trim() ||
+          ({ GUARD: 'Portería', ADMIN: 'Administrador', STAFF: 'Personal', RESIDENT: 'Residente' } as const)[role],
         role: role as UserRole,
+        team: role === 'STAFF' ? dto.team?.trim().slice(0, 60) || null : null,
       },
     });
     if (role === 'RESIDENT' && dto.unitId && occupancyType) {

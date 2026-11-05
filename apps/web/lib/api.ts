@@ -25,6 +25,19 @@ export async function putFileToPresignedUrl(url: string, file: File): Promise<vo
   if (!res.ok) throw new ApiError(res.status, 'No se pudo subir el archivo');
 }
 
+/** Unauthenticated calls (one-time links: /api/public/...). */
+export async function publicRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${API_URL}/api/public${path}`, {
+    ...init,
+    headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new ApiError(res.status, body || res.statusText);
+  }
+  return (await res.json()) as T;
+}
+
 /**
  * Typed API client bound to the current Clerk session. Attaches the JWT via
  * useAuth().getToken() and throws ApiError on any non-2xx response.

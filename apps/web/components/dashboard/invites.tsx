@@ -12,7 +12,8 @@ export interface PendingInvite {
   id: string;
   fullName: string;
   phone: string;
-  role: 'RESIDENT' | 'GUARD' | 'ADMIN';
+  role: 'RESIDENT' | 'GUARD' | 'ADMIN' | 'STAFF';
+  team?: string | null;
   unitNumber: string | null;
   occupancyType: string | null;
   createdAt: string;
@@ -29,6 +30,7 @@ const ROLE_LABEL: Record<PendingInvite['role'], string> = {
   RESIDENT: 'Residente',
   GUARD: 'Portería',
   ADMIN: 'Administración',
+  STAFF: 'Personal',
 };
 const OCC_LABEL: Record<string, string> = {
   OWNER: 'Propietario',
@@ -93,6 +95,7 @@ export function InvitesCard() {
                 <span className="font-medium">{i.fullName}</span>
                 <span className="ml-2 text-xs text-nexo-muted">
                   {i.phone} · {ROLE_LABEL[i.role]}
+                  {i.team ? ` (${i.team})` : ''}
                   {i.unitNumber ? ` · Unidad ${i.unitNumber}` : ''}
                   {i.occupancyType ? ` · ${OCC_LABEL[i.occupancyType] ?? i.occupancyType}` : ''}
                 </span>
@@ -127,7 +130,8 @@ export function InviteDialog({
   const qc = useQueryClient();
   const [phone, setPhone] = useState('');
   const [fullName, setFullName] = useState('');
-  const [role, setRole] = useState<'GUARD' | 'ADMIN'>('GUARD');
+  const [role, setRole] = useState<'STAFF' | 'GUARD' | 'ADMIN'>('STAFF');
+  const [team, setTeam] = useState('');
   const [occupancyType, setOccupancyType] = useState('OWNER');
 
   const send = useMutation({
@@ -138,6 +142,7 @@ export function InviteDialog({
         role: unit ? 'RESIDENT' : role,
         unitId: unit?.id,
         occupancyType: unit ? occupancyType : undefined,
+        team: !unit && role === 'STAFF' ? team.trim() || undefined : undefined,
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['invites'] });
@@ -160,12 +165,22 @@ export function InviteDialog({
         ) : (
           <div>
             <label className="text-sm font-medium">Rol</label>
-            <select value={role} onChange={(e) => setRole(e.target.value as 'GUARD' | 'ADMIN')} className={fieldCls}>
+            <select value={role} onChange={(e) => setRole(e.target.value as 'STAFF' | 'GUARD' | 'ADMIN')} className={fieldCls}>
+              <option value="STAFF">Personal de operación (mantenimiento, aseo…)</option>
               <option value="GUARD">Portería</option>
               <option value="ADMIN">Administración</option>
             </select>
+            {role === 'STAFF' ? (
+              <p className="mt-1 text-xs text-nexo-muted">Ve solo sus tareas asignadas, desde el celular.</p>
+            ) : null}
           </div>
         )}
+        {!unit && role === 'STAFF' ? (
+          <div>
+            <label className="text-sm font-medium">Equipo</label>
+            <input value={team} onChange={(e) => setTeam(e.target.value)} placeholder="Mantenimiento" className={fieldCls} />
+          </div>
+        ) : null}
         <div>
           <label className="text-sm font-medium">Celular</label>
           <input
@@ -232,9 +247,23 @@ export function BulkInviteDialog({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
   const [text, setText] = useState('');
   const rows = useMemo(() => parseInviteCsv(text), [text]);
+  const [progress, setProgress] = useState<string | null>(null);
+  // Chunked so a 1,500-row load never hits a request timeout.
   const send = useMutation({
-    mutationFn: () => api.post<{ results: BulkResult[] }>('/invites/bulk', { rows }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['invites'] }),
+    mutationFn: async () => {
+      const all: BulkResult[] = [];
+      for (let i = 0; i < rows.length; i += 150) {
+        setProgress(`${Math.min(i + 150, rows.length)} de ${rows.length}…`);
+        const res = await api.post<{ results: BulkResult[] }>('/invites/bulk', { rows: rows.slice(i, i + 150) });
+        all.push(...res.results.map((r) => ({ ...r, row: r.row + i })));
+      }
+      return { results: all };
+    },
+    onSettled: () => {
+      setProgress(null);
+      qc.invalidateQueries({ queryKey: ['invites'] });
+      qc.invalidateQueries({ queryKey: ['units'] });
+    },
   });
   const results = send.data?.results;
   const counts = results
@@ -270,7 +299,11 @@ export function BulkInviteDialog({ onClose }: { onClose: () => void }) {
           </label>
           <Button variant="accent" className="w-full" disabled={rows.length === 0 || send.isPending} onClick={() => send.mutate()}>
             {send.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-            {rows.length ? `Invitar ${rows.length} residente${rows.length === 1 ? '' : 's'}` : 'Invitar'}
+            {send.isPending
+              ? `Invitando ${progress ?? ''}`
+              : rows.length
+                ? `Invitar ${rows.length} residente${rows.length === 1 ? '' : 's'}`
+                : 'Invitar'}
           </Button>
           {send.isError ? <p className="text-xs text-red-600">{errorText(send.error)}</p> : null}
         </div>

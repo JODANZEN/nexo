@@ -28,6 +28,10 @@ import {
 import { ESCALATION_QUEUE, EVALUATE } from './escalation.processor';
 import type { AuthUser } from '../auth/auth.types';
 import { isKeyInPrefix } from '../auth/unit-access';
+import { NotificationsService } from '../notifications/notifications.service';
+import { OperationsService } from './operations.service';
+import { ASSIGNABLE_ROLES, RoutingService } from './routing.service';
+import { addBusinessMs, businessMsBetween, dueAfter } from './sla';
 
 const MAX_ATTACHMENTS = 6;
 
@@ -41,15 +45,25 @@ export interface CreatePqrDto {
   scope?: string;
 }
 
-// SLA targets in hours per priority (first response / resolution). Defaults —
-// tune per client in config once discovery gives real numbers.
-const SLA_HOURS: Record<PqrPriority, { firstResponse: number; resolution: number }> = {
-  P1: { firstResponse: 1, resolution: 4 },
-  P2: { firstResponse: 4, resolution: 24 },
-  P3: { firstResponse: 8, resolution: 72 },
-  P4: { firstResponse: 24, resolution: 168 },
-};
+/** Ticket created by the system or staff (preventive maintenance, internal ops). */
+export interface InternalTicketInput {
+  conjuntoId: string;
+  submittedById: string; // users.id
+  unitId?: string | null;
+  category: PqrCategory;
+  priority?: PqrPriority;
+  scope?: PqrScope;
+  title: string;
+  description: string;
+  attachments?: string[];
+  assignedToId?: string | null; // explicit; otherwise routing rules decide
+  maintenancePlanId?: string | null;
+}
+
+// SLA targets per priority are configured per conjunto (Operación → Tiempos
+// objetivo); see ./sla.ts for defaults and business-hours arithmetic.
 const HOUR_MS = 3_600_000;
+type Access = 'admin' | 'staff' | 'resident';
 export interface PqrPhotoDto {
   filename: string;
   contentType?: string;
@@ -67,6 +81,9 @@ export class PqrsService {
     private readonly prisma: PrismaService,
     @InjectQueue(NOTIFICATIONS_QUEUE) private readonly notifications: Queue,
     @InjectQueue(ESCALATION_QUEUE) private readonly escalation: Queue,
+    private readonly ops: OperationsService,
+    private readonly routing: RoutingService,
+    private readonly notifier: NotificationsService,
   ) {}
 
   // Enqueue an SLA re-evaluation. The processor self-reschedules to the next
@@ -86,7 +103,7 @@ export class PqrsService {
     // their conjunto. (Before, any unitId was accepted.)
     const unitId = dto.unitId ?? user.unitId ?? null;
     if (unitId) {
-      if (user.role !== 'ADMIN' && unitId !== user.unitId) throw new ForbiddenException();
+      if (user.role !== 'ADMIN' && user.role !== 'STAFF' && unitId !== user.unitId) throw new ForbiddenException();
       const unit = await this.prisma.db.unit.findUnique({ where: { id: unitId }, select: { conjunto_id: true } });
       if (!unit || unit.conjunto_id !== dbUser.conjunto_id) throw new ForbiddenException();
     }
@@ -98,28 +115,81 @@ export class PqrsService {
       throw new BadRequestException('Invalid attachment');
     }
 
-    const priority = parsePriority(dto.priority) ?? PqrPriority.P3;
-    const scope = parseScope(dto.scope) ?? PqrScope.IN_UNIT;
-    const now = Date.now();
-    const sla = SLA_HOURS[priority];
+    return this.createInternal({
+      conjuntoId: dbUser.conjunto_id,
+      submittedById: dbUser.id,
+      unitId,
+      category: parseCategory(dto.category),
+      priority: parsePriority(dto.priority) ?? PqrPriority.P3,
+      scope: parseScope(dto.scope) ?? PqrScope.IN_UNIT,
+      title: dto.title.trim(),
+      description: dto.description.trim(),
+      attachments,
+    });
+  }
+
+  /**
+   * Shared create path: per-client SLA (business hours aware), auto-assignment via
+   * routing rules, assignee notification, escalation kick-off. Callers validate.
+   */
+  async createInternal(input: InternalTicketInput): Promise<Pqr> {
+    const priority = input.priority ?? PqrPriority.P3;
+    const scope = input.scope ?? PqrScope.IN_UNIT;
+    const { sla, businessHours } = await this.ops.loadConfig(input.conjuntoId);
+    const target = sla[priority];
+    const now = new Date();
+    const assignedToId =
+      input.assignedToId ?? (await this.routing.pickAssignee(input.conjuntoId, input.category, scope));
 
     const created = await this.prisma.db.pqr.create({
       data: {
-        conjunto_id: dbUser.conjunto_id,
-        unit_id: unitId,
-        submitted_by_id: dbUser.id,
-        category: parseCategory(dto.category),
+        conjunto_id: input.conjuntoId,
+        unit_id: input.unitId ?? null,
+        submitted_by_id: input.submittedById,
+        assigned_to_id: assignedToId,
+        category: input.category,
         priority,
         scope,
-        first_response_due_at: new Date(now + sla.firstResponse * HOUR_MS),
-        resolution_due_at: new Date(now + sla.resolution * HOUR_MS),
-        title: dto.title.trim(),
-        description: dto.description.trim(),
-        attachments,
+        first_response_due_at: dueAfter(now, target.firstResponse, target, businessHours),
+        resolution_due_at: dueAfter(now, target.resolution, target, businessHours),
+        title: input.title.slice(0, 200),
+        description: input.description.slice(0, 5000),
+        attachments: input.attachments ?? [],
+        maintenance_plan_id: input.maintenancePlanId ?? null,
       },
     });
+    if (assignedToId) this.notifyAssigned(created, assignedToId);
     this.scheduleEscalation(created.id, 1000); // kick off SLA tracking
     return created;
+  }
+
+  private notifyAssigned(pqr: Pqr, assigneeId: string): void {
+    void (async () => {
+      const u = await this.prisma.db.user.findUnique({ where: { id: assigneeId }, select: { role: true } });
+      await this.notifier.notifyUser({
+        conjuntoId: pqr.conjunto_id,
+        userId: assigneeId,
+        type: 'pqr.assigned',
+        title: `Nueva tarea ${pqr.priority}: "${pqr.title}"`,
+        entityType: 'Pqr',
+        entityId: pqr.id,
+        link: u?.role === 'STAFF' ? `/tareas/${pqr.id}` : `/dashboard/solicitudes/${pqr.id}`,
+      });
+    })().catch((err: unknown) => this.logger.warn(`assignment notify failed: ${String(err)}`));
+  }
+
+  /** Who is asking about this ticket: admin, the assigned staff member, or a resident of its unit. */
+  private async access(user: AuthUser, pqr: Pqr | null): Promise<Access> {
+    // 404 across tenants (don't leak existence); 403 inside the tenant.
+    if (!pqr || pqr.conjunto_id !== user.conjuntoId) throw new NotFoundException('PQR not found');
+    if (user.role === 'ADMIN') return 'admin';
+    if (user.role === 'STAFF') {
+      const me = await this.resolveUser(user.userId);
+      if (pqr.assigned_to_id === me.id) return 'staff';
+      throw new ForbiddenException();
+    }
+    if (user.role === 'RESIDENT' && pqr.unit_id && pqr.unit_id === user.unitId) return 'resident';
+    throw new ForbiddenException();
   }
 
   // Presigned PUT for a PQR photo. Client uploads, then passes the r2Key in `attachments`.
@@ -133,18 +203,23 @@ export class PqrsService {
 
   // Residents see their own unit's tickets; admins see everything in their conjunto.
   // Optional status filter (e.g. ?status=OPEN).
-  async list(user: AuthUser, status?: string): Promise<Pqr[]> {
+  // Staff see the tickets assigned to them (also admins with ?assigned=me).
+  async list(user: AuthUser, status?: string, assigned?: string): Promise<Pqr[]> {
     if (!user.conjuntoId) throw new ForbiddenException('Token has no conjuntoId');
-    const where: {
-      conjunto_id?: string;
-      unit_id?: string;
-      status?: PqrStatus;
-    } =
-      user.role === 'ADMIN'
-        ? { conjunto_id: user.conjuntoId ?? undefined }
-        : { conjunto_id: user.conjuntoId ?? undefined, unit_id: user.unitId ?? '__none__' };
-    if (status && status in PqrStatus) where.status = status as PqrStatus;
-    return this.prisma.db.pqr.findMany({ where, orderBy: { created_at: 'desc' } });
+    const where: Prisma.PqrWhereInput = { conjunto_id: user.conjuntoId };
+    if (user.role === 'STAFF' || (user.role === 'ADMIN' && assigned === 'me')) {
+      where.assigned_to_id = (await this.resolveUser(user.userId)).id;
+    } else if (user.role !== 'ADMIN') {
+      where.unit_id = user.role === 'RESIDENT' && user.unitId ? user.unitId : '__none__';
+    }
+    if (status === 'ACTIVE') where.status = { in: [PqrStatus.OPEN, PqrStatus.IN_REVIEW, PqrStatus.AWAITING_RESIDENT] };
+    else if (status && status in PqrStatus) where.status = status as PqrStatus;
+    return this.prisma.db.pqr.findMany({
+      where,
+      orderBy: { created_at: 'desc' },
+      take: 500,
+      include: { unit: { select: { unit_number: true, tower: true } } },
+    });
   }
 
   async getOne(
@@ -153,12 +228,14 @@ export class PqrsService {
   ): Promise<Pqr & { comments: PqrComment[]; attachmentUrls: string[] }> {
     const pqr = await this.prisma.db.pqr.findUnique({
       where: { id: pqrId },
-      include: { comments: { orderBy: { created_at: 'asc' } } },
+      include: {
+        comments: { orderBy: { created_at: 'asc' } },
+        unit: { select: { unit_number: true, tower: true } },
+      },
     });
-    this.authorize(user, pqr);
-    // Hide internal (admin-only) notes from residents.
-    const comments =
-      user.role === 'ADMIN' ? pqr!.comments : pqr!.comments.filter((c) => !c.is_internal);
+    const access = await this.access(user, pqr);
+    // Hide internal notes from residents (staff working the ticket see them).
+    const comments = access === 'resident' ? pqr!.comments.filter((c) => !c.is_internal) : pqr!.comments;
     // Photos were stored but never shown to anyone — return short-lived URLs.
     const prefix = `conjuntos/${pqr!.conjunto_id}/units/`;
     const attachmentUrls = await Promise.all(
@@ -170,10 +247,12 @@ export class PqrsService {
   }
 
   async updateStatus(user: AuthUser, pqrId: string, status: string): Promise<Pqr> {
-    if (user.role !== 'ADMIN') throw new ForbiddenException();
     const next = parseStatus(status);
     const pqr = await this.prisma.db.pqr.findUnique({ where: { id: pqrId } });
-    if (!pqr || pqr.conjunto_id !== user.conjuntoId) throw new NotFoundException('PQR not found');
+    const access = await this.access(user, pqr);
+    if (access === 'resident') throw new ForbiddenException();
+    if (access === 'staff' && next === PqrStatus.CLOSED) throw new ForbiddenException('Solo administración cierra solicitudes');
+    if (!pqr) throw new NotFoundException('PQR not found');
     if (!canTransition(pqr.status, next)) {
       throw new BadRequestException(`Cannot transition ${pqr.status} → ${next}`);
     }
@@ -189,17 +268,22 @@ export class PqrsService {
     if (next === PqrStatus.AWAITING_RESIDENT) {
       data.awaiting_since = now;
     }
-    // Leaving AWAITING_RESIDENT: bank the paused time and push due dates forward.
+    // Leaving AWAITING_RESIDENT: bank the paused time and push due dates forward
+    // by the time that was left on the clock when it paused (business-hours aware).
     if (pqr.status === PqrStatus.AWAITING_RESIDENT && pqr.awaiting_since) {
       const delta = now.getTime() - pqr.awaiting_since.getTime();
       data.paused_ms = pqr.paused_ms + delta;
       data.awaiting_since = null;
-      if (pqr.first_response_due_at) {
-        data.first_response_due_at = new Date(pqr.first_response_due_at.getTime() + delta);
-      }
-      if (pqr.resolution_due_at) {
-        data.resolution_due_at = new Date(pqr.resolution_due_at.getTime() + delta);
-      }
+      const { sla, businessHours } = await this.ops.loadConfig(pqr.conjunto_id);
+      const target = sla[pqr.priority];
+      const shift = (due: Date | null): Date | undefined => {
+        if (!due) return undefined;
+        if (!target.businessHours) return new Date(due.getTime() + delta);
+        const left = businessMsBetween(pqr.awaiting_since!, due, businessHours);
+        return due.getTime() <= pqr.awaiting_since!.getTime() ? due : addBusinessMs(now, left, businessHours);
+      };
+      if (pqr.first_responded_at == null) data.first_response_due_at = shift(pqr.first_response_due_at);
+      data.resolution_due_at = shift(pqr.resolution_due_at);
     }
     if (next === PqrStatus.RESOLVED) {
       data.resolved_at = now;
@@ -235,16 +319,48 @@ export class PqrsService {
     if (!dto.body?.trim()) throw new BadRequestException('body is required');
     const dbUser = await this.resolveUser(user.userId);
     const pqr = await this.prisma.db.pqr.findUnique({ where: { id: pqrId } });
-    this.authorize(user, pqr);
-    return this.prisma.db.pqrComment.create({
+    const access = await this.access(user, pqr);
+    const isOps = access !== 'resident';
+    const created = await this.prisma.db.pqrComment.create({
       data: {
         pqr_id: pqrId,
         author_id: dbUser.id,
-        body: dto.body.trim(),
-        // Only admins can leave internal notes.
-        is_internal: user.role === 'ADMIN' ? (dto.isInternal ?? false) : false,
+        body: dto.body.trim().slice(0, 5000),
+        // Only admins / assigned staff can leave internal notes.
+        is_internal: isOps ? (dto.isInternal ?? false) : false,
       },
     });
+    // A visible reply from the team counts as the first response.
+    if (isOps && !created.is_internal && pqr!.first_responded_at == null) {
+      await this.prisma.db.pqr.update({ where: { id: pqrId }, data: { first_responded_at: created.created_at } });
+    }
+    // Residents hear about replies; the assignee hears about resident replies.
+    if (isOps && !created.is_internal && pqr!.unit_id) {
+      void this.notifier
+        .notifyUnitResidents(pqr!.unit_id, {
+          type: 'pqr.comment',
+          title: `Nueva respuesta en "${pqr!.title}"`,
+          body: created.body.slice(0, 280),
+          entityType: 'Pqr',
+          entityId: pqrId,
+          link: `/portal/solicitudes/${pqrId}`,
+        })
+        .catch(() => undefined);
+    } else if (!isOps && pqr!.assigned_to_id) {
+      void this.notifier
+        .notifyUser({
+          conjuntoId: pqr!.conjunto_id,
+          userId: pqr!.assigned_to_id,
+          type: 'pqr.comment',
+          title: `El residente respondió en "${pqr!.title}"`,
+          body: created.body.slice(0, 280),
+          entityType: 'Pqr',
+          entityId: pqrId,
+          link: `/tareas/${pqrId}`,
+        })
+        .catch(() => undefined);
+    }
+    return created;
   }
 
   // Assign a ticket to a staff/admin user in the same conjunto.
@@ -254,13 +370,21 @@ export class PqrsService {
     const pqr = await this.prisma.db.pqr.findUnique({ where: { id: pqrId } });
     if (!pqr || pqr.conjunto_id !== user.conjuntoId) throw new NotFoundException('PQR not found');
     const assignee = await this.prisma.db.user.findUnique({ where: { id: assigneeUserId } });
-    if (!assignee || assignee.conjunto_id !== user.conjuntoId) {
-      throw new NotFoundException('Assignee not found');
+    if (
+      !assignee ||
+      assignee.conjunto_id !== user.conjuntoId ||
+      !assignee.is_active ||
+      !ASSIGNABLE_ROLES.includes(assignee.role)
+    ) {
+      throw new BadRequestException('Solo se puede asignar a personal o administración');
     }
-    return this.prisma.db.pqr.update({
+    const updated = await this.prisma.db.pqr.update({
       where: { id: pqrId },
-      data: { assigned_to_id: assigneeUserId },
+      data: { assigned_to_id: assigneeUserId, escalation_level: 0 },
     });
+    if (pqr.assigned_to_id !== assigneeUserId) this.notifyAssigned(updated, assigneeUserId);
+    this.scheduleEscalation(updated.id, 1000);
+    return updated;
   }
 
   // Change priority → recompute SLA due dates (preserving any banked pause time).
@@ -270,14 +394,19 @@ export class PqrsService {
     if (!priority) throw new BadRequestException(`Invalid priority: ${priorityRaw}`);
     const pqr = await this.prisma.db.pqr.findUnique({ where: { id: pqrId } });
     if (!pqr || pqr.conjunto_id !== user.conjuntoId) throw new NotFoundException('PQR not found');
-    const sla = SLA_HOURS[priority];
-    const base = pqr.created_at.getTime() + pqr.paused_ms;
+    const { sla, businessHours } = await this.ops.loadConfig(pqr.conjunto_id);
+    const target = sla[priority];
+    // Due dates from creation under the new target, then pushed by banked pause time.
+    const due = (hours: number) =>
+      new Date(dueAfter(pqr.created_at, hours, target, businessHours).getTime() + pqr.paused_ms);
     const updated = await this.prisma.db.pqr.update({
       where: { id: pqrId },
       data: {
         priority,
-        first_response_due_at: new Date(base + sla.firstResponse * HOUR_MS),
-        resolution_due_at: new Date(base + sla.resolution * HOUR_MS),
+        first_response_due_at: due(target.firstResponse),
+        resolution_due_at: due(target.resolution),
+        escalation_level: 0,
+        sla_breached: false,
       },
     });
     this.scheduleEscalation(updated.id, 1000); // recompute thresholds for new priority
@@ -292,10 +421,11 @@ export class PqrsService {
     return dbUser;
   }
 
-  private authorize(user: AuthUser, pqr: Pqr | null): asserts pqr is Pqr {
-    // 404 across tenants (don't leak existence); 403 for same-tenant wrong-unit residents.
-    if (!pqr || pqr.conjunto_id !== user.conjuntoId) throw new NotFoundException('PQR not found');
-    if (user.role !== 'ADMIN' && pqr.unit_id !== user.unitId) throw new ForbiddenException();
+  /** Exposed for EntryAuthorizationsService (same access rules as the ticket). */
+  async accessFor(user: AuthUser, pqrId: string): Promise<{ pqr: Pqr; access: Access }> {
+    const pqr = await this.prisma.db.pqr.findUnique({ where: { id: pqrId } });
+    const access = await this.access(user, pqr);
+    return { pqr: pqr!, access };
   }
 }
 

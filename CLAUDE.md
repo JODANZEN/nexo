@@ -193,6 +193,14 @@ Original scaffold intent (kept for reference):
 
 **🔄 Phase 19 — Integrations (provider-adapter layer built; live where creds exist):** `src/integrations/` (@Global `IntegrationsModule`) — every adapter is a graceful no-op until its env keys are set. **Twilio** (WhatsApp→SMS) wired into `NotificationsService.deliver` (completes the reachability loop). **HubSpot** contact upsert wired into resident assignment. **Siigo** (auth implemented; invoice/receipt/tercero push TODO — needs client catalog ids) and **DocuSign** (skeleton; JWT + templates TODO) await City U's credentials from the discovery engagement. Env keys in `.env.example` (RESEND/EMAIL_FROM, TWILIO_*, HUBSPOT_TOKEN, SIIGO_*, DOCUSIGN_*). Gate CRM/accounting/e-sign behind the PREMIUM entitlement when turned on.
 
+**✅ Operations (2026-11, migration `operations`) — City U pilot gaps:**
+- **Units import:** `POST /units` · `POST /units/bulk` (upsert by number, creates missing room types, COP "1.250.000" parsing, one RLS transaction) · `PATCH /units/:id`. UI: Propiedades → Agregar / Importar (chunked 300 rows).
+- **STAFF role + auto-assignment:** invite role `STAFF` (+ `team`); STAFF sees only assigned tickets, can't CLOSE, lands on `/tareas` (phone-first). `PqrRoutingRule` (category/scope → candidates, least open tickets wins). `/operations/team`, `/operations/routing-rules`.
+- **Per-client SLA + business hours:** `conjuntos.sla_config` / `business_hours` (`src/pqrs/sla.ts`: business-time math, Colombian festivos incl. Ley Emiliani). Escalation fractions measured on the ticket's own clock; first-response breach alerts once. UI: `/dashboard/operacion`.
+- **Entry authorization:** `EntryAuthorization` per ticket → resident approves in portal or via one-time link `/autorizar/:token` (token hashed; link only in SMS/WhatsApp/email, never in the DB feed; needs `APP_URL`). Request pauses the ticket; decision resumes it. Portería card lists approved entries, "Registrar ingreso" is audited.
+- **Preventive maintenance:** `MaintenancePlan` (every N days/weeks/months, lead days) → daily cron 05:30 COT creates MAINTENANCE tickets (idempotent conditional claim). UI: `/dashboard/mantenimiento`.
+- Tests: `dist/smoke-ops.js` (37 checks, in CI). All ticket creation goes through `PqrsService.createInternal()`.
+
 **Revised priority:** City U track (17 → 18 → 19) now leads. Contabilidad Completo (15) folds into the Siigo integration story; DIAN (16) and Wompi (13) remain deferred.
 
 **Frontend conventions:** shadcn/ui components throughout; TanStack Query for all API calls (cache + refetch on focus); no raw `fetch()` in components. Web reads `NEXT_PUBLIC_API_URL` + `.env.local` Clerk keys; the API's `ClerkAuthGuard` needs `publicMetadata` (conjuntoId/unitId/role) in the session token.

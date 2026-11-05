@@ -12,6 +12,7 @@ import { BillingController } from './billing/billing.controller';
 import { OnboardingService } from './onboarding/onboarding.service';
 import { InspectionsService } from './inspections/inspections.service';
 import { PqrsService } from './pqrs/pqrs.service';
+import { makePqrsService } from './smoke-helpers';
 import { PaymentsService } from './payments/payments.service';
 import { WompiReconcileProcessor } from './payments/wompi-reconcile.processor';
 import { VisitorPurgeService } from './visitors/visitor-purge.service';
@@ -47,7 +48,7 @@ async function main(): Promise<void> {
   const hubspot = { upsertContact: async () => undefined } as unknown as HubspotService;
   const onboarding = new OnboardingService(ps, clerk, hubspot);
   const inspections = new InspectionsService(ps);
-  const pqrs = new PqrsService(ps, fakeQueue, fakeQueue);
+  const pqrs = makePqrsService(ps);
 
   // Tenant A = seed conjunto. Tenant B = a second conjunto created here.
   const unitA = await prisma.unit.findFirst();

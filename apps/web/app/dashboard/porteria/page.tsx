@@ -5,6 +5,7 @@ import { useQuery, useMutation } from '@tanstack/react-query';
 import { Loader2, QrCode, UserPlus, Package, CheckCircle2, ShieldAlert } from 'lucide-react';
 import { useApi, ApiError } from '@/lib/api';
 import { Card } from '@/components/ui/card';
+import { AuthorizedEntriesCard } from '@/components/tickets/authorized-entries';
 import { Button } from '@/components/ui/button';
 
 export const dynamic = 'force-dynamic';
@@ -54,6 +55,7 @@ export default function PorteriaPage() {
       </div>
 
       <QrCheckIn />
+      <AuthorizedEntriesCard />
       <WalkIn units={units.data ?? []} />
       <DeliveryLog units={units.data ?? []} />
     </div>

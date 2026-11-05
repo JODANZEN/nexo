@@ -6,6 +6,7 @@ import type { Queue } from 'bullmq';
 import { prisma } from '@nexo/database';
 import { PrismaService } from './prisma/prisma.service';
 import { PqrsService } from './pqrs/pqrs.service';
+import { makePqrsService } from './smoke-helpers';
 import { BillingService } from './billing/billing.service';
 import { VisitorsService } from './visitors/visitors.service';
 import { runAsTenant } from './tenancy/tenant-context';
@@ -75,7 +76,7 @@ async function main(): Promise<void> {
   };
   const admin: AuthUser = { userId: 'admin_rls', conjuntoId: cjA, unitId: null, role: 'ADMIN', occupancyType: null };
   await runAsTenant(cjA, async () => {
-    const pqrs = new PqrsService(ps, fakeQueue, fakeQueue);
+    const pqrs = makePqrsService(ps);
     const pqr = await pqrs.create(resident, { category: 'MAINTENANCE', title: 'RLS', description: 'RLS' });
     await pqrs.updateStatus(admin, pqr.id, 'IN_REVIEW');
     await pqrs.addComment(resident, pqr.id, { body: 'hola' });

@@ -1,10 +1,12 @@
 import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
 
-const isPublic = createRouteMatcher(['/', '/sign-in(.*)', '/sign-up(.*)']);
+// /autorizar/:token = one-time entry-approval link from SMS/WhatsApp (no login).
+const isPublic = createRouteMatcher(['/', '/sign-in(.*)', '/sign-up(.*)', '/autorizar(.*)']);
 const isOnboarding = createRouteMatcher(['/onboarding(.*)']);
 const isDashboard = createRouteMatcher(['/dashboard(.*)']);
 const isPortal = createRouteMatcher(['/portal(.*)']);
+const isTareas = createRouteMatcher(['/tareas(.*)']);
 
 export default clerkMiddleware(async (auth, req) => {
   if (isPublic(req)) return;
@@ -26,8 +28,12 @@ export default clerkMiddleware(async (auth, req) => {
 
   // Role-based areas: RESIDENT → /portal. ADMIN lands on /dashboard by default but
   // may also open /portal (demo/preview of the resident experience).
-  if (role === 'RESIDENT' && isDashboard(req)) {
+  if (role === 'RESIDENT' && (isDashboard(req) || isTareas(req))) {
     return NextResponse.redirect(new URL('/portal', req.url));
+  }
+  // Operations staff only work their assigned tasks (phone-first app).
+  if (role === 'STAFF' && !isTareas(req)) {
+    return NextResponse.redirect(new URL('/tareas', req.url));
   }
 
   return;

@@ -9,6 +9,7 @@ import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { PQR_STATUS, PQR_CATEGORY } from '@/lib/status-badges';
 import { cn } from '@/lib/utils';
+import { EntryDecisionPanel } from '@/components/tickets/entry-authorization';
 
 interface PqrComment {
   id: string;
@@ -91,6 +92,8 @@ export default function PortalSolicitudDetail() {
           </div>
         ) : null}
       </Card>
+
+      <EntryDecisionPanel pqrId={data.id} />
 
       <Card className="p-5">
         <h2 className="text-base font-semibold tracking-tight">Comentarios</h2>

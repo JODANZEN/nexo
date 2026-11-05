@@ -11,6 +11,8 @@ export interface NotifyInput {
   entityType?: string;
   entityId?: string;
   link?: string;
+  /** Text for SMS/WhatsApp/email only — never persisted (e.g. one-time links). */
+  deliveryText?: string;
 }
 
 /**
@@ -74,10 +76,11 @@ export class NotificationsService {
     input: NotifyInput,
   ): Promise<void> {
     try {
-      await this.sendEmail(user?.email, input.title, input.body ?? input.title);
+      await this.sendEmail(user?.email, input.title, input.deliveryText ?? input.body ?? input.title);
       // WhatsApp (primary) + SMS (fallback) via Twilio. No-op until configured.
       if (user?.phone) {
-        const text = input.body ? `${input.title}\n${input.body}` : input.title;
+        const extra = input.deliveryText ?? input.body;
+        const text = extra ? `${input.title}\n${extra}` : input.title;
         await this.twilio.send(user.phone, text);
       }
     } catch (err) {
@@ -95,7 +98,8 @@ export class NotificationsService {
         from: process.env.EMAIL_FROM ?? 'Nexo <onboarding@resend.dev>',
         to,
         subject,
-        html: `<p>${html}</p>`,
+        // Titles/bodies carry user text (ticket titles…) — escape, keep line breaks.
+        html: `<p>${escapeHtml(html).replace(/\n/g, '<br>')}</p>`,
       }),
     });
     if (!res.ok) this.logger.warn(`Resend email failed (${res.status})`);
@@ -146,4 +150,8 @@ export class NotificationsService {
     });
     return { updated: r.count };
   }
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 }

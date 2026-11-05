@@ -5,6 +5,7 @@ import type { Queue } from 'bullmq';
 import { prisma } from '@nexo/database';
 import { PrismaService } from './prisma/prisma.service';
 import { PqrsService } from './pqrs/pqrs.service';
+import { makePqrsService } from './smoke-helpers';
 import { InspectionsService } from './inspections/inspections.service';
 import type { AuthUser } from './auth/auth.types';
 
@@ -13,7 +14,7 @@ const fakeQueue = { add: async () => undefined } as unknown as Queue;
 
 async function main(): Promise<void> {
   const prismaService = new PrismaService();
-  const pqrs = new PqrsService(prismaService, fakeQueue, fakeQueue);
+  const pqrs = makePqrsService(prismaService);
   const inspections = new InspectionsService(prismaService);
 
   const unit = await prisma.unit.findFirst();

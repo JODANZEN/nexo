@@ -1,12 +1,15 @@
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import helmet from 'helmet';
 import { tenantContextMiddleware } from './tenancy/tenant-context';
 import { AppModule } from './app.module';
 
 async function bootstrap(): Promise<void> {
   // rawBody: true so the Wompi webhook can HMAC-verify the exact bytes received.
-  const app = await NestFactory.create(AppModule, { rawBody: true });
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, { rawBody: true });
+  // Unit / resident CSV imports (≈1,500 rows) exceed the 100 kb default.
+  app.useBodyParser('json', { limit: '2mb' });
 
   // Standard security headers (nosniff, frame-deny, HSTS, …). JSON API, so CSP is moot.
   app.use(helmet());

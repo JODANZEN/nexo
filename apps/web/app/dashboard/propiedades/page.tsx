@@ -4,17 +4,18 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useUser } from '@clerk/nextjs';
-import { Loader2, UserPlus, UserCheck, Plus, Trash2, ChevronRight } from 'lucide-react';
+import { Loader2, UserPlus, UserCheck, Plus, Trash2, ChevronRight, Upload, Pencil } from 'lucide-react';
 import { useApi } from '@/lib/api';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Dialog } from '@/components/ui/dialog';
 import { InvitesCard, InviteDialog } from '@/components/dashboard/invites';
+import { ImportUnitsDialog, UnitDialog, type EditableUnit } from '@/components/dashboard/units-import';
+import { cop } from '@/lib/status-badges';
 
-interface Unit {
-  id: string;
-  unit_number: string;
+interface Unit extends EditableUnit {
   room_type_id: string | null;
+  occupants: number;
 }
 interface RoomType {
   id: string;
@@ -35,6 +36,10 @@ export default function PropiedadesPage() {
 
   const [assignUnit, setAssignUnit] = useState<Unit | null>(null);
   const [inviteUnit, setInviteUnit] = useState<Unit | null>(null);
+  const [editUnit, setEditUnit] = useState<Unit | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const [filter, setFilter] = useState('');
 
   const setType = useMutation({
     mutationFn: (v: { unitId: string; roomTypeId: string | null }) =>
@@ -46,6 +51,10 @@ export default function PropiedadesPage() {
   });
 
   const types = roomTypes.data ?? [];
+  const q = filter.trim().toLowerCase();
+  const shown = (units.data ?? []).filter(
+    (u) => !q || u.unit_number.toLowerCase().includes(q) || (u.tower ?? '').toLowerCase().includes(q),
+  );
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -59,10 +68,34 @@ export default function PropiedadesPage() {
       {isAdmin ? <RoomTypesCard types={types} /> : null}
 
       <Card className="overflow-hidden">
-        <div className="p-5 pb-2">
-          <h2 className="text-base font-semibold tracking-tight">Unidades</h2>
-          <p className="text-xs text-nexo-muted">Toca una unidad para ver su trazabilidad completa.</p>
+        <div className="flex flex-wrap items-start justify-between gap-3 p-5 pb-2">
+          <div>
+            <h2 className="text-base font-semibold tracking-tight">
+              Unidades{units.data?.length ? <span className="ml-1 text-nexo-muted">({units.data.length})</span> : null}
+            </h2>
+            <p className="text-xs text-nexo-muted">Toca una unidad para ver su trazabilidad completa.</p>
+          </div>
+          {isAdmin ? (
+            <div className="flex gap-2">
+              <Button size="sm" variant="outline" onClick={() => setAddOpen(true)}>
+                <Plus className="h-4 w-4" /> Agregar
+              </Button>
+              <Button size="sm" variant="accent" onClick={() => setImportOpen(true)}>
+                <Upload className="h-4 w-4" /> Importar
+              </Button>
+            </div>
+          ) : null}
         </div>
+        {(units.data?.length ?? 0) > 12 ? (
+          <div className="px-5 pb-2">
+            <input
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              placeholder="Buscar unidad o torre…"
+              className="h-9 w-full rounded-lg border border-nexo-border bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-nexo-teal"
+            />
+          </div>
+        ) : null}
         {units.isLoading ? (
           <div className="space-y-2 p-5">
             {[0, 1, 2].map((i) => (
@@ -74,17 +107,26 @@ export default function PropiedadesPage() {
             Error al cargar datos. {(units.error as Error).message}
           </div>
         ) : !units.data || units.data.length === 0 ? (
-          <div className="p-8 text-center text-sm text-nexo-muted">Sin unidades aún.</div>
+          <div className="p-8 text-center text-sm text-nexo-muted">
+            Sin unidades aún.{isAdmin ? ' Usa “Importar” para cargar todas las habitaciones desde Excel.' : ''}
+          </div>
         ) : (
           <ul className="divide-y divide-nexo-border">
-            {units.data.map((u) => (
-              <li key={u.id} className="flex items-center justify-between gap-3 px-5 py-3">
+            {shown.slice(0, 500).map((u) => (
+              <li key={u.id} className="flex flex-wrap items-center justify-between gap-3 px-5 py-3">
                 <Link
                   href={`/dashboard/propiedades/${u.id}`}
-                  className="group flex min-w-0 items-center gap-1 text-sm font-medium hover:text-nexo-teal"
+                  className="group min-w-0 text-sm hover:text-nexo-teal"
                 >
-                  Unidad {u.unit_number}
-                  <ChevronRight className="h-4 w-4 text-nexo-faint group-hover:text-nexo-teal" />
+                  <span className="flex items-center gap-1 font-medium">
+                    {u.tower ? `${u.tower} · ` : ''}Unidad {u.unit_number}
+                    <ChevronRight className="h-4 w-4 text-nexo-faint group-hover:text-nexo-teal" />
+                  </span>
+                  <span className="block text-xs text-nexo-muted">
+                    {u.floor != null ? `Piso ${u.floor} · ` : ''}
+                    {u.monthly_fee ? `${cop(u.monthly_fee)} · ` : ''}
+                    {u.occupants ? `${u.occupants} residente${u.occupants === 1 ? '' : 's'}` : 'Sin residente'}
+                  </span>
                 </Link>
                 {isAdmin ? (
                   <div className="flex items-center gap-2">
@@ -100,6 +142,9 @@ export default function PropiedadesPage() {
                         </option>
                       ))}
                     </select>
+                    <Button size="sm" variant="ghost" onClick={() => setEditUnit(u)} aria-label={`Editar unidad ${u.unit_number}`}>
+                      <Pencil className="h-4 w-4" />
+                    </Button>
                     <Button size="sm" variant="outline" onClick={() => setInviteUnit(u)}>
                       <UserPlus className="h-4 w-4" /> Invitar
                     </Button>
@@ -118,10 +163,16 @@ export default function PropiedadesPage() {
             ))}
           </ul>
         )}
+        {shown.length > 500 ? (
+          <p className="px-5 py-3 text-xs text-nexo-muted">Mostrando 500 de {shown.length}. Usa la búsqueda para encontrar una unidad.</p>
+        ) : null}
       </Card>
 
       {assignUnit ? <AssignResidentDialog unit={assignUnit} onClose={() => setAssignUnit(null)} /> : null}
       {inviteUnit ? <InviteDialog unit={inviteUnit} onClose={() => setInviteUnit(null)} /> : null}
+      {editUnit ? <UnitDialog unit={editUnit} onClose={() => setEditUnit(null)} /> : null}
+      {addOpen ? <UnitDialog onClose={() => setAddOpen(false)} /> : null}
+      {importOpen ? <ImportUnitsDialog onClose={() => setImportOpen(false)} /> : null}
     </div>
   );
 }

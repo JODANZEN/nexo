@@ -5,6 +5,8 @@ import { PqrStatus, UserRole, type Pqr } from '@nexo/database';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { LAZY_WORKER_OPTS } from '../queue/worker-options';
+import { OperationsService } from './operations.service';
+import { addBusinessMs, remainingMs } from './sla';
 
 export const ESCALATION_QUEUE = 'ticket-escalation';
 export const EVALUATE = 'evaluate';
@@ -28,6 +30,7 @@ export class EscalationProcessor extends WorkerHost {
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
     @InjectQueue(ESCALATION_QUEUE) private readonly queue: Queue,
+    private readonly ops: OperationsService,
   ) {
     super();
   }
@@ -58,10 +61,22 @@ export class EscalationProcessor extends WorkerHost {
     }
 
     if (!pqr.resolution_due_at) return; // no SLA to enforce
-    const window = pqr.resolution_due_at.getTime() - pqr.created_at.getTime() - pqr.paused_ms;
-    if (window <= 0) return;
-    const elapsed = Date.now() - pqr.created_at.getTime() - pqr.paused_ms;
-    const fraction = elapsed / window;
+    // Fractions are measured on the ticket's own clock (24/7 or business hours),
+    // so a ticket opened Friday evening doesn't hit "90%" on Sunday.
+    const { sla, businessHours } = await this.ops.loadConfig(pqr.conjunto_id);
+    const target = sla[pqr.priority];
+    const now = new Date();
+    const window = target.resolution * HOUR_MS;
+    const left = remainingMs(now, pqr.resolution_due_at, target, businessHours);
+    const fraction = 1 - left / window;
+
+    // First-response target missed (nobody replied or picked it up yet): alert once.
+    let firstResponseAlerted = pqr.first_response_alerted;
+    const frDue = pqr.first_response_due_at;
+    if (!pqr.first_responded_at && frDue && !firstResponseAlerted && frDue.getTime() <= now.getTime()) {
+      firstResponseAlerted = true;
+      await this.notifyAssignee(pqr, `⏱️ Sin primera respuesta: "${pqr.title}"`);
+    }
 
     let level = pqr.escalation_level;
     if (fraction >= 1 && level < 3) {
@@ -75,17 +90,24 @@ export class EscalationProcessor extends WorkerHost {
       await this.notifyAssignee(pqr, `⏰ SLA al 70%: "${pqr.title}"`);
     }
 
-    if (level !== pqr.escalation_level) {
+    if (level !== pqr.escalation_level || firstResponseAlerted !== pqr.first_response_alerted) {
       await this.prisma.db.pqr.update({
         where: { id: pqr.id },
-        data: { escalation_level: level, sla_breached: level >= 3 ? true : pqr.sla_breached },
+        data: {
+          escalation_level: level,
+          sla_breached: level >= 3 ? true : pqr.sla_breached,
+          first_response_alerted: firstResponseAlerted,
+        },
       });
     }
 
     if (level < 3) {
+      // Next threshold = when the clock's remaining time drops to (1 - nextFrac) of the window.
       const nextFrac = level === 0 ? 0.7 : level === 1 ? 0.9 : 1;
-      const nextAbs = pqr.resolution_due_at.getTime() - (1 - nextFrac) * window;
-      await this.schedule(pqr.id, Math.max(60_000, nextAbs - Date.now()));
+      const untilNext = Math.max(0, left - (1 - nextFrac) * window);
+      let at = target.businessHours ? addBusinessMs(now, untilNext, businessHours).getTime() : now.getTime() + untilNext;
+      if (!pqr.first_responded_at && frDue && !firstResponseAlerted) at = Math.min(at, frDue.getTime());
+      await this.schedule(pqr.id, Math.max(60_000, at - now.getTime()));
     }
   }
 
@@ -97,6 +119,7 @@ export class EscalationProcessor extends WorkerHost {
 
   private async notifyAssignee(pqr: Pqr, title: string): Promise<void> {
     if (pqr.assigned_to_id) {
+      const who = await this.prisma.db.user.findUnique({ where: { id: pqr.assigned_to_id }, select: { role: true } });
       await this.notifications.notifyUser({
         conjuntoId: pqr.conjunto_id,
         userId: pqr.assigned_to_id,
@@ -104,7 +127,7 @@ export class EscalationProcessor extends WorkerHost {
         title,
         entityType: 'Pqr',
         entityId: pqr.id,
-        link: `/dashboard/solicitudes/${pqr.id}`,
+        link: who?.role === UserRole.STAFF ? `/tareas/${pqr.id}` : `/dashboard/solicitudes/${pqr.id}`,
       });
     } else {
       await this.notifyStaff(pqr, title);
@@ -113,7 +136,7 @@ export class EscalationProcessor extends WorkerHost {
 
   private async notifyStaff(pqr: Pqr, title: string): Promise<void> {
     const admins = await this.prisma.db.user.findMany({
-      where: { conjunto_id: pqr.conjunto_id, role: UserRole.ADMIN },
+      where: { conjunto_id: pqr.conjunto_id, role: UserRole.ADMIN, is_active: true },
       select: { id: true },
     });
     for (const a of admins) {

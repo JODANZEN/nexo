@@ -22,6 +22,8 @@ import {
   BookOpen,
   Sparkles,
   Lock,
+  Route,
+  Wrench,
   type LucideIcon,
 } from 'lucide-react';
 import type { FeatureKey } from '@nexo/types';
@@ -43,6 +45,8 @@ const NAV: NavItem[] = [
   { label: 'Pagos', href: '/dashboard/pagos', icon: CreditCard, feature: 'pagos' },
   { label: 'Contabilidad', href: '/dashboard/contabilidad', icon: BookOpen, feature: 'contabilidad.lite' },
   { label: 'Solicitudes', href: '/dashboard/solicitudes', icon: ClipboardList, feature: 'pqr' },
+  { label: 'Operación', href: '/dashboard/operacion', icon: Route, feature: 'pqr' },
+  { label: 'Mantenimiento', href: '/dashboard/mantenimiento', icon: Wrench, feature: 'pqr' },
   { label: 'Asamblea', href: '/dashboard/asambleas', icon: Vote, feature: 'asambleas' },
   { label: 'Portería', href: '/dashboard/porteria', icon: ShieldCheck, feature: 'porteria' },
   { label: 'Parqueaderos', href: '/dashboard/porteria/parking', icon: ParkingSquare, feature: 'parqueaderos' },

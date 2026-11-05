@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button';
 import { PQR_STATUS, PQR_CATEGORY } from '@/lib/status-badges';
 import { PRIORITY, SCOPE, slaState } from '@/lib/ticket-labels';
 import { cn } from '@/lib/utils';
+import { EntryRequestPanel } from '@/components/tickets/entry-authorization';
 
 interface PqrComment {
   id: string;
@@ -31,6 +32,8 @@ interface PqrDetail {
   assigned_to_id: string | null;
   escalation_level: number;
   created_at: string;
+  unit_id: string | null;
+  maintenance_plan_id: string | null;
   comments: PqrComment[];
   attachmentUrls?: string[];
 }
@@ -38,6 +41,8 @@ interface Member {
   id: string;
   name: string;
   role: string;
+  team: string | null;
+  openTickets: number;
 }
 
 const NEXT_STATUS: Record<string, string[]> = {
@@ -67,8 +72,8 @@ export default function SolicitudDetailPage() {
     queryFn: () => api.get<PqrDetail>(`/pqrs/${id}`),
   });
   const members = useQuery({
-    queryKey: ['comunidad', 'directory'],
-    queryFn: () => api.get<Member[]>('/comunidad/directory'),
+    queryKey: ['operations', 'team'],
+    queryFn: () => api.get<Member[]>('/operations/team'),
     enabled: isAdmin,
   });
 
@@ -195,6 +200,7 @@ export default function SolicitudDetailPage() {
                 {(members.data ?? []).map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.name}
+                    {m.team ? ` · ${m.team}` : m.role === 'ADMIN' ? ' · Admin' : ''} ({m.openTickets} abiertas)
                   </option>
                 ))}
               </select>
@@ -229,6 +235,10 @@ export default function SolicitudDetailPage() {
             (se le enviará un recordatorio automático).
           </p>
         </Card>
+      ) : null}
+
+      {isAdmin && data.unit_id ? (
+        <EntryRequestPanel pqrId={data.id} disabled={data.status === 'RESOLVED' || data.status === 'CLOSED'} />
       ) : null}
 
       {/* Comment thread */}
