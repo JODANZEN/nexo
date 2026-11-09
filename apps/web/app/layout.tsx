@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 import { Poppins } from 'next/font/google';
 import { ClerkProvider } from '@clerk/nextjs';
+import { esMX } from '@clerk/localizations';
 import { Providers } from './providers';
 import './globals.css';
 
@@ -19,7 +20,9 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <ClerkProvider>
+    // Spanish + in-app sign-in (not Clerk's hosted English page). One screen for
+    // sign-in and sign-up: invited residents just type their phone.
+    <ClerkProvider localization={esMX} signInUrl="/sign-in" signUpUrl="/sign-in">
       <html lang="es" className={poppins.variable}>
         <body className="font-sans">
           <Providers>{children}</Providers>

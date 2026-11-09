@@ -37,7 +37,7 @@ export default clerkMiddleware(async (auth, req) => {
   }
 
   return;
-});
+}, { signInUrl: '/sign-in', signUpUrl: '/sign-in' });
 
 export const config = {
   matcher: [

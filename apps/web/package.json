@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@clerk/localizations": "3.37.10",
     "@clerk/nextjs": "^6.0.0",
     "@nexo/types": "*",
     "@tanstack/react-query": "^5.51.1",
