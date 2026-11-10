@@ -201,6 +201,12 @@ Original scaffold intent (kept for reference):
 - **Preventive maintenance:** `MaintenancePlan` (every N days/weeks/months, lead days) → daily cron 05:30 COT creates MAINTENANCE tickets (idempotent conditional claim). UI: `/dashboard/mantenimiento`.
 - Tests: `dist/smoke-ops.js` (37 checks, in CI). All ticket creation goes through `PqrsService.createInternal()`.
 
+**✅ Nov 10 — reachability, install, limits, area views:**
+- **Invitation message:** creating an invite queues an SMS/WhatsApp with `{APP_URL}/sign-in` (`onboarding/invite-messenger.ts`, in-memory queue, concurrency 2, no feed row); `POST /invites/:id/resend` (10-min cooldown via `users.invite_sent_at`); manual WhatsApp/copy links; printable QR poster `/dashboard/propiedades/afiche`. `smoke-invites`.
+- **Installable web app:** `app/manifest.ts`, icons in `public/` (`scripts/generate-icons.mjs`), install invitation on `/portal` and `/tareas`. No service worker on purpose (no caching of personal data).
+- **Rate limiting:** `@nestjs/throttler` global (`src/security/throttling.ts`): 600/min per IP + 300/min per Clerk user; public entry links 10/min per IP; `POST /pqrs` 30/min; `/health` + Wompi webhook exempt; `trust proxy` = 1.
+- **Area views:** GUARD is confined to Portería (+ parqueaderos, anuncios) in `proxy.ts`/sidebar. `users.is_team_lead` (STAFF): "Mi equipo" tab in `/tareas`, can work and reassign tickets within their `team`, gets level-2/3 escalations. Admin: `GET /pqrs?team=&assignee=`, `GET /operations/team-summary`, per-team summary + filters in Solicitudes. `smoke-areas`.
+
 **Revised priority:** City U track (17 → 18 → 19) now leads. Contabilidad Completo (15) folds into the Siigo integration story; DIAN (16) and Wompi (13) remain deferred.
 
 **Frontend conventions:** shadcn/ui components throughout; TanStack Query for all API calls (cache + refetch on focus); no raw `fetch()` in components. Web reads `NEXT_PUBLIC_API_URL` + `.env.local` Clerk keys; the API's `ClerkAuthGuard` needs `publicMetadata` (conjuntoId/unitId/role) in the session token.
