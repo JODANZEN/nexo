@@ -36,6 +36,16 @@ export class OperationsController {
     return this.ops.setTeam(user, userId, body?.team ?? null);
   }
 
+  @Patch('team/:userId/lead')
+  setTeamLead(@CurrentUser() user: AuthUser, @Param('userId') userId: string, @Body() body: { isTeamLead: boolean }) {
+    return this.ops.setTeamLead(user, userId, body?.isTeamLead);
+  }
+
+  @Get('team-summary')
+  teamSummary(@CurrentUser() user: AuthUser) {
+    return this.ops.teamSummary(user);
+  }
+
   @Get('routing-rules')
   listRules(@CurrentUser() user: AuthUser) {
     return this.routing.list(user);

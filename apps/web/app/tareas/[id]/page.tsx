@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useParams } from 'next/navigation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CheckCircle2, Loader2, Lock, MapPin, PauseCircle, PlayCircle } from 'lucide-react';
+import { CheckCircle2, Loader2, Lock, MapPin, PauseCircle, PlayCircle, UserRound } from 'lucide-react';
 import { useApi } from '@/lib/api';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -12,7 +12,7 @@ import { PQR_CATEGORY, PQR_STATUS } from '@/lib/status-badges';
 import { PRIORITY, slaState } from '@/lib/ticket-labels';
 import { EntryRequestPanel } from '@/components/tickets/entry-authorization';
 import { cn } from '@/lib/utils';
-import { where, type Tarea } from '@/lib/tareas';
+import { sameTeam, where, type Tarea, type TeamMember } from '@/lib/tareas';
 
 interface Detail extends Tarea {
   description: string;
@@ -41,12 +41,21 @@ export default function TareaPage() {
   const [body, setBody] = useState('');
   const [internal, setInternal] = useState(false);
   const q = useQuery({ queryKey: ['tarea', id], queryFn: () => api.get<Detail>(`/pqrs/${id}`) });
+  const roster = useQuery({
+    queryKey: ['operations', 'team'],
+    queryFn: () => api.get<TeamMember[]>('/operations/team'),
+    staleTime: 5 * 60_000,
+  });
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ['tarea', id] });
     qc.invalidateQueries({ queryKey: ['tareas'] });
   };
   const status = useMutation({
     mutationFn: (s: string) => api.patch(`/pqrs/${id}/status`, { status: s }),
+    onSuccess: refresh,
+  });
+  const reassign = useMutation({
+    mutationFn: (assigneeUserId: string) => api.patch(`/pqrs/${id}/assign`, { assigneeUserId }),
     onSuccess: refresh,
   });
   const comment = useMutation({
@@ -64,6 +73,12 @@ export default function TareaPage() {
   const sla = slaState(t);
   const st = PQR_STATUS[t.status];
   const done = t.status === 'RESOLVED' || t.status === 'CLOSED';
+  // Jefe de área: can move the ticket to another active member of the same team.
+  const me = roster.data?.find((m) => m.isMe);
+  const myTeam = me?.role === 'STAFF' && me.isTeamLead ? me.team : null;
+  const teammates = myTeam ? (roster.data ?? []).filter((m) => m.role === 'STAFF' && sameTeam(m.team, myTeam)) : [];
+  const canReassign = !done && !!t.assigned_to && sameTeam(t.assigned_to.team, myTeam) && teammates.length > 1;
+  const mine = !t.assigned_to || !me || t.assigned_to.id === me.id;
 
   return (
     <div className="space-y-4">
@@ -85,6 +100,35 @@ export default function TareaPage() {
           {PQR_CATEGORY[t.category] ?? t.category} · {fmt(t.created_at)}
           {sla.text ? <span className={cn('ml-2', sla.cls)}>{sla.text}</span> : null}
         </p>
+        {t.assigned_to && (!mine || canReassign) ? (
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
+            <UserRound className="h-4 w-4 text-nexo-muted" />
+            {canReassign ? (
+              <label className="flex items-center gap-2">
+                <span className="text-nexo-muted">Responsable</span>
+                <select
+                  value={t.assigned_to.id}
+                  disabled={reassign.isPending}
+                  onChange={(e) => reassign.mutate(e.target.value)}
+                  className="h-9 rounded-lg border border-nexo-border bg-white px-2 text-sm"
+                >
+                  {teammates.some((m) => m.id === t.assigned_to!.id) ? null : (
+                    <option value={t.assigned_to.id}>{t.assigned_to.full_name}</option>
+                  )}
+                  {teammates.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name}
+                      {m.isMe ? ' (tú)' : ''} · {m.openTickets} abiertas
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : (
+              <span className="text-nexo-muted">La tiene {t.assigned_to.full_name}</span>
+            )}
+            {reassign.isError ? <span className="text-xs text-red-600">{apiMessage(reassign.error)}</span> : null}
+          </div>
+        ) : null}
         <p className="mt-3 whitespace-pre-line text-sm">{t.description}</p>
         {t.attachmentUrls?.length ? (
           <div className="mt-3 flex flex-wrap gap-2">

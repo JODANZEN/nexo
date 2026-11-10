@@ -226,6 +226,7 @@ model User {
   is_active        Boolean  @default(true)
   push_token       String? // FCM / APNs token for push notifications
   team             String? // STAFF team label: "Mantenimiento", "Aseo", "Recepción"
+  is_team_lead     Boolean  @default(false) // STAFF only: sees and reassigns the tickets of their own `team`
   created_at       DateTime @default(now())
   updated_at       DateTime @updatedAt
 

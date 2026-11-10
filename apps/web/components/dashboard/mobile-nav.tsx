@@ -2,7 +2,8 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Home, CreditCard, ClipboardList, User, Plus, type LucideIcon } from 'lucide-react';
+import { useUser } from '@clerk/nextjs';
+import { Home, CreditCard, ClipboardList, User, Plus, ShieldCheck, ParkingSquare, Megaphone, type LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface NavItem {
@@ -18,9 +19,33 @@ const NAV: NavItem[] = [
   { label: 'Perfil', href: '/mi-cuenta', icon: User },
 ];
 
+// Portería (GUARD): only its own screens (same list the proxy allows).
+const GUARD_NAV: NavItem[] = [
+  { label: 'Portería', href: '/dashboard/porteria', icon: ShieldCheck },
+  { label: 'Parqueaderos', href: '/dashboard/porteria/parking', icon: ParkingSquare },
+  { label: 'Anuncios', href: '/dashboard/anuncios', icon: Megaphone },
+];
+
 // Bottom tab bar with a centered teal FAB (mobile only).
 export function MobileNav() {
   const pathname = usePathname();
+  const { user, isLoaded } = useUser();
+  if (!isLoaded) return null;
+
+  if (user?.publicMetadata?.role === 'GUARD') {
+    const active = GUARD_NAV.map((i) => i.href)
+      .filter((h) => pathname === h || pathname.startsWith(h + '/'))
+      .sort((a, b) => b.length - a.length)[0];
+    return (
+      <nav className="fixed inset-x-0 bottom-0 z-20 border-t border-nexo-border bg-white md:hidden">
+        <div className="mx-auto grid max-w-md grid-cols-3 items-center px-2 py-2">
+          {GUARD_NAV.map((item) => (
+            <Tab key={item.label} item={item} active={item.href === active} />
+          ))}
+        </div>
+      </nav>
+    );
+  }
 
   return (
     <nav className="fixed inset-x-0 bottom-0 z-20 border-t border-nexo-border bg-white md:hidden">

@@ -7,6 +7,8 @@ const isOnboarding = createRouteMatcher(['/onboarding(.*)']);
 const isDashboard = createRouteMatcher(['/dashboard(.*)']);
 const isPortal = createRouteMatcher(['/portal(.*)']);
 const isTareas = createRouteMatcher(['/tareas(.*)']);
+// Portería (GUARD) works only here: the guard hub (+ parqueaderos under it) and the read-only notice board.
+const isGuardArea = createRouteMatcher(['/dashboard/porteria(.*)', '/dashboard/anuncios']);
 
 export default clerkMiddleware(async (auth, req) => {
   if (isPublic(req)) return;
@@ -34,6 +36,10 @@ export default clerkMiddleware(async (auth, req) => {
   // Operations staff only work their assigned tasks (phone-first app).
   if (role === 'STAFF' && !isTareas(req)) {
     return NextResponse.redirect(new URL('/tareas', req.url));
+  }
+  // Guards stay in Portería: no other dashboard screen, no /portal, no /tareas.
+  if (role === 'GUARD' && !isGuardArea(req)) {
+    return NextResponse.redirect(new URL('/dashboard/porteria', req.url));
   }
 
   return;

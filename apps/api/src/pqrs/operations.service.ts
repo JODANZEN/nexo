@@ -48,7 +48,7 @@ export class OperationsService {
     const people = await this.prisma.db.user.findMany({
       where: { conjunto_id: user.conjuntoId, is_active: true, role: { in: ASSIGNABLE_ROLES } },
       orderBy: [{ role: 'asc' }, { full_name: 'asc' }],
-      select: { id: true, full_name: true, role: true, team: true, external_auth_id: true },
+      select: { id: true, full_name: true, role: true, team: true, is_team_lead: true, external_auth_id: true },
     });
     const load = await this.prisma.db.pqr.groupBy({
       by: ['assigned_to_id'],
@@ -65,6 +65,8 @@ export class OperationsService {
       name: p.full_name,
       role: p.role,
       team: p.team,
+      isTeamLead: p.role === UserRole.STAFF && p.is_team_lead,
+      isMe: p.external_auth_id === user.userId,
       pending: p.external_auth_id == null, // invited, hasn't signed in yet
       openTickets: by.get(p.id) ?? 0,
     }));
@@ -82,4 +84,80 @@ export class OperationsService {
       select: { id: true, team: true },
     });
   }
+
+  /** Jefe de área: only an ADMIN of the same conjunto can grant or remove it, and only on STAFF. */
+  async setTeamLead(user: AuthUser, userId: string, isTeamLead: unknown) {
+    if (user.role !== 'ADMIN' || !user.conjuntoId) throw new ForbiddenException();
+    if (typeof isTeamLead !== 'boolean') throw new BadRequestException('isTeamLead debe ser true o false');
+    const target = await this.prisma.db.user.findUnique({ where: { id: userId } });
+    if (!target || target.conjunto_id !== user.conjuntoId || target.role !== UserRole.STAFF) {
+      throw new ForbiddenException();
+    }
+    return this.prisma.db.user.update({
+      where: { id: userId },
+      data: { is_team_lead: isTeamLead },
+      select: { id: true, team: true, is_team_lead: true },
+    });
+  }
+
+  /**
+   * Admin view by area: per team, tickets being worked (OPEN/IN_REVIEW), waiting on the
+   * resident, and overdue (being worked and past the resolution target). Tickets held by
+   * people without a team and unassigned tickets get their own rows. 4 queries, no N+1.
+   */
+  async teamSummary(user: AuthUser) {
+    if (user.role !== 'ADMIN' || !user.conjuntoId) throw new ForbiddenException();
+    const conjunto_id = user.conjuntoId;
+    const working = [PqrStatus.OPEN, PqrStatus.IN_REVIEW];
+    const [people, byStatus, overdue] = await Promise.all([
+      this.prisma.db.user.findMany({
+        where: { conjunto_id, role: { in: ASSIGNABLE_ROLES } },
+        select: { id: true, role: true, team: true, is_active: true },
+      }),
+      this.prisma.db.pqr.groupBy({
+        by: ['assigned_to_id', 'status'],
+        where: { conjunto_id, status: { in: [...working, PqrStatus.AWAITING_RESIDENT] } },
+        _count: { _all: true },
+      }),
+      this.prisma.db.pqr.groupBy({
+        by: ['assigned_to_id'],
+        where: {
+          conjunto_id,
+          status: { in: working },
+          OR: [{ sla_breached: true }, { resolution_due_at: { lt: new Date() } }],
+        },
+        _count: { _all: true },
+      }),
+    ]);
+    type Row = { key: string; team: string | null; kind: 'team' | 'no_team' | 'unassigned'; members: number; active: number; awaiting: number; overdue: number };
+    const rows = new Map<string, Row>();
+    const row = (key: string, team: string | null, kind: Row['kind']): Row => {
+      let r = rows.get(key);
+      if (!r) rows.set(key, (r = { key, team, kind, members: 0, active: 0, awaiting: 0, overdue: 0 }));
+      return r;
+    };
+    const rowOf = new Map<string, Row>();
+    for (const p of people) {
+      const label = p.role === UserRole.STAFF ? p.team?.trim() : '';
+      const r = label ? row(`team:${teamKey(label)}`, label, 'team') : row('no_team', null, 'no_team');
+      if (p.is_active && label) r.members += 1;
+      rowOf.set(p.id, r);
+    }
+    const target = (id: string | null) => (id ? rowOf.get(id) ?? row('no_team', null, 'no_team') : row('unassigned', null, 'unassigned'));
+    for (const g of byStatus) {
+      const r = target(g.assigned_to_id);
+      if (g.status === PqrStatus.AWAITING_RESIDENT) r.awaiting += g._count._all;
+      else r.active += g._count._all;
+    }
+    for (const g of overdue) target(g.assigned_to_id).overdue += g._count._all;
+    const order = { team: 0, no_team: 1, unassigned: 2 };
+    return [...rows.values()]
+      .filter((r) => r.kind === 'team' || r.active + r.awaiting + r.overdue > 0)
+      .sort((a, b) => order[a.kind] - order[b.kind] || (a.team ?? '').localeCompare(b.team ?? '', 'es'));
+  }
+}
+
+/** Team labels are free text: compare them trimmed and case-insensitively. */
+export function teamKey(team: string | null | undefined): string {
+  return (team ?? '').trim().toLowerCase();
 }

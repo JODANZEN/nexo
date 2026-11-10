@@ -20,8 +20,15 @@ export class PqrsController {
   }
 
   @Get()
-  list(@CurrentUser() user: AuthUser, @Query('status') status?: string, @Query('assigned') assigned?: string) {
-    return this.pqrs.list(user, status, assigned);
+  list(
+    @CurrentUser() user: AuthUser,
+    @Query('status') status?: string,
+    @Query('assigned') assigned?: string,
+    @Query('scope') scope?: string,
+    @Query('team') team?: string,
+    @Query('assignee') assignee?: string,
+  ) {
+    return this.pqrs.list(user, { status, assigned, scope, team, assignee });
   }
 
   @Post('photo-url')

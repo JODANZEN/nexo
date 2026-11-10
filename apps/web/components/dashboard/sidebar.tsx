@@ -26,6 +26,7 @@ import {
   Wrench,
   type LucideIcon,
 } from 'lucide-react';
+import { useUser } from '@clerk/nextjs';
 import type { FeatureKey } from '@nexo/types';
 import { NexoLogo } from '@/components/nexo-logo';
 import { useEntitlements } from '@/lib/use-entitlements';
@@ -60,9 +61,16 @@ const NAV: NavItem[] = [
   { label: 'Configuración', href: '/dashboard/configuracion', icon: Settings, feature: 'configuracion' },
 ];
 
+// Portería (GUARD) only gets its own screens; the proxy enforces the same list.
+export const GUARD_HREFS = ['/dashboard/porteria', '/dashboard/porteria/parking', '/dashboard/anuncios'];
+
 export function Sidebar() {
   const pathname = usePathname();
   const { has } = useEntitlements();
+  const { user, isLoaded } = useUser();
+  const isGuard = user?.publicMetadata?.role === 'GUARD';
+  // Nothing until the role is known, so a guard never sees the full menu flash by.
+  const items = !isLoaded ? [] : isGuard ? NAV.filter((i) => GUARD_HREFS.includes(i.href)) : NAV;
 
   // Highlight only the single best match: the longest nav href that prefixes the
   // current path. Prevents a parent (/dashboard/porteria) from staying active on
@@ -80,7 +88,7 @@ export function Sidebar() {
       </div>
 
       <nav className="mt-8 flex-1 space-y-1">
-        {NAV.map((item) => {
+        {items.map((item) => {
           const locked = item.feature ? !has(item.feature) : false;
           const active = item.href === activeHref;
 
@@ -117,6 +125,7 @@ export function Sidebar() {
         })}
       </nav>
 
+      {isGuard ? null : (
       <Link
         href="/dashboard/ayuda"
         className="mt-4 flex items-center gap-3 rounded-xl bg-[var(--sidebar-hover-bg)] px-3 py-3 transition-colors hover:bg-[var(--sidebar-active-bg)]"
@@ -129,6 +138,7 @@ export function Sidebar() {
           <span className="block text-xs text-[var(--sidebar-text)]">Centro de ayuda</span>
         </span>
       </Link>
+      )}
     </aside>
   );
 }

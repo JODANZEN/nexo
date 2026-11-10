@@ -14,6 +14,7 @@ import {
   PqrPriority,
   PqrScope,
   PqrStatus,
+  UserRole,
   generatePresignedGetUrl,
   generatePresignedPutUrl,
   type Pqr,
@@ -29,7 +30,7 @@ import { ESCALATION_QUEUE, EVALUATE } from './escalation.processor';
 import type { AuthUser } from '../auth/auth.types';
 import { isKeyInPrefix } from '../auth/unit-access';
 import { NotificationsService } from '../notifications/notifications.service';
-import { OperationsService } from './operations.service';
+import { OperationsService, teamKey } from './operations.service';
 import { ASSIGNABLE_ROLES, RoutingService } from './routing.service';
 import { addBusinessMs, businessMsBetween, dueAfter } from './sla';
 
@@ -68,6 +69,14 @@ export interface PqrPhotoDto {
   filename: string;
   contentType?: string;
 }
+export interface PqrListFilters {
+  status?: string;
+  assigned?: string; // 'me' (admin working their own queue)
+  scope?: string; // 'team' (jefe de área: everything assigned to their team)
+  team?: string; // admin: tickets held by members of this team
+  assignee?: string; // admin: users.id, or 'none' for unassigned
+}
+const WHO = { select: { id: true, full_name: true, team: true } } as const;
 export interface AddCommentDto {
   body: string;
   isInternal?: boolean;
@@ -186,6 +195,10 @@ export class PqrsService {
     if (user.role === 'STAFF') {
       const me = await this.resolveUser(user.userId);
       if (pqr.assigned_to_id === me.id) return 'staff';
+      // Jefe de área: same powers as the assignee on tickets held by their own team.
+      // Unassigned tickets and other teams stay out of reach.
+      const team = leadTeam(me);
+      if (team && pqr.assigned_to_id && (await this.teamMember(pqr.conjunto_id, team, pqr.assigned_to_id))) return 'staff';
       throw new ForbiddenException();
     }
     if (user.role === 'RESIDENT' && pqr.unit_id && pqr.unit_id === user.unitId) return 'resident';
@@ -204,21 +217,39 @@ export class PqrsService {
   // Residents see their own unit's tickets; admins see everything in their conjunto.
   // Optional status filter (e.g. ?status=OPEN).
   // Staff see the tickets assigned to them (also admins with ?assigned=me).
-  async list(user: AuthUser, status?: string, assigned?: string): Promise<Pqr[]> {
+  // Jefe de área with ?scope=team: every ticket assigned to a member of their team.
+  // Admins can narrow by ?team= (area) and ?assignee= (users.id | 'none').
+  async list(user: AuthUser, filters: PqrListFilters = {}): Promise<Pqr[]> {
     if (!user.conjuntoId) throw new ForbiddenException('Token has no conjuntoId');
+    const { status, assigned, scope, team, assignee } = filters;
     const where: Prisma.PqrWhereInput = { conjunto_id: user.conjuntoId };
-    if (user.role === 'STAFF' || (user.role === 'ADMIN' && assigned === 'me')) {
-      where.assigned_to_id = (await this.resolveUser(user.userId)).id;
-    } else if (user.role !== 'ADMIN') {
+    if ((team || assignee) && user.role !== 'ADMIN') throw new ForbiddenException();
+    if (user.role === 'STAFF') {
+      const me = await this.resolveUser(user.userId);
+      if (scope === 'team') {
+        const mine = leadTeam(me);
+        if (!mine) throw new ForbiddenException('Solo el jefe de área ve las solicitudes del equipo');
+        where.assigned_to = { is: teamWhere(user.conjuntoId, mine) };
+      } else {
+        where.assigned_to_id = me.id;
+      }
+    } else if (user.role === 'ADMIN') {
+      if (assigned === 'me') where.assigned_to_id = (await this.resolveUser(user.userId)).id;
+      else if (assignee === 'none') where.assigned_to_id = null;
+      else if (assignee) where.assigned_to_id = assignee;
+      if (team?.trim()) where.assigned_to = { is: teamWhere(user.conjuntoId, team) };
+    } else {
       where.unit_id = user.role === 'RESIDENT' && user.unitId ? user.unitId : '__none__';
     }
+    const ops = user.role === 'ADMIN' || user.role === 'STAFF';
     if (status === 'ACTIVE') where.status = { in: [PqrStatus.OPEN, PqrStatus.IN_REVIEW, PqrStatus.AWAITING_RESIDENT] };
     else if (status && status in PqrStatus) where.status = status as PqrStatus;
     return this.prisma.db.pqr.findMany({
       where,
       orderBy: { created_at: 'desc' },
       take: 500,
-      include: { unit: { select: { unit_number: true, tower: true } } },
+      // Who holds it: only for the operations side (same query, no N+1).
+      include: { unit: { select: { unit_number: true, tower: true } }, ...(ops ? { assigned_to: WHO } : {}) },
     });
   }
 
@@ -226,14 +257,17 @@ export class PqrsService {
     user: AuthUser,
     pqrId: string,
   ): Promise<Pqr & { comments: PqrComment[]; attachmentUrls: string[] }> {
-    const pqr = await this.prisma.db.pqr.findUnique({
+    const found = await this.prisma.db.pqr.findUnique({
       where: { id: pqrId },
       include: {
         comments: { orderBy: { created_at: 'asc' } },
         unit: { select: { unit_number: true, tower: true } },
+        assigned_to: WHO,
       },
     });
-    const access = await this.access(user, pqr);
+    const access = await this.access(user, found);
+    // Residents don't get the assignee's name/team (unchanged for them).
+    const pqr = access === 'resident' && found ? { ...found, assigned_to: undefined } : found;
     // Hide internal notes from residents (staff working the ticket see them).
     const comments = access === 'resident' ? pqr!.comments.filter((c) => !c.is_internal) : pqr!.comments;
     // Photos were stored but never shown to anyone — return short-lived URLs.
@@ -364,12 +398,31 @@ export class PqrsService {
   }
 
   // Assign a ticket to a staff/admin user in the same conjunto.
+  // A jefe de área can move a ticket of their team to another active member of that team.
   async assign(user: AuthUser, pqrId: string, assigneeUserId: string): Promise<Pqr> {
-    if (user.role !== 'ADMIN') throw new ForbiddenException();
+    if (user.role !== 'ADMIN' && user.role !== 'STAFF') throw new ForbiddenException();
     if (!assigneeUserId) throw new BadRequestException('assigneeUserId is required');
     const pqr = await this.prisma.db.pqr.findUnique({ where: { id: pqrId } });
     if (!pqr || pqr.conjunto_id !== user.conjuntoId) throw new NotFoundException('PQR not found');
     const assignee = await this.prisma.db.user.findUnique({ where: { id: assigneeUserId } });
+    if (user.role === 'STAFF') {
+      const team = leadTeam(await this.resolveUser(user.userId));
+      if (!team) throw new ForbiddenException();
+      // The ticket must already be in the team (unassigned / other teams: admin only)…
+      if (!pqr.assigned_to_id || !(await this.teamMember(pqr.conjunto_id, team, pqr.assigned_to_id))) {
+        throw new ForbiddenException();
+      }
+      // …and stay in it.
+      if (
+        !assignee ||
+        assignee.conjunto_id !== user.conjuntoId ||
+        !assignee.is_active ||
+        assignee.role !== UserRole.STAFF ||
+        teamKey(assignee.team) !== teamKey(team)
+      ) {
+        throw new ForbiddenException('Solo puedes reasignar a personas activas de tu equipo');
+      }
+    }
     if (
       !assignee ||
       assignee.conjunto_id !== user.conjuntoId ||
@@ -413,6 +466,15 @@ export class PqrsService {
     return updated;
   }
 
+  /** Is `userId` a STAFF member of `team` in this conjunto? (Inactive members count: their tickets need a new owner.) */
+  private async teamMember(conjuntoId: string, team: string, userId: string): Promise<boolean> {
+    const hit = await this.prisma.db.user.findFirst({
+      where: { id: userId, ...teamWhere(conjuntoId, team) },
+      select: { id: true },
+    });
+    return hit != null;
+  }
+
   private async resolveUser(authUserId: string) {
     const dbUser = await this.prisma.db.user.findUnique({
       where: { external_auth_id: authUserId },
@@ -427,6 +489,16 @@ export class PqrsService {
     const access = await this.access(user, pqr);
     return { pqr: pqr!, access };
   }
+}
+
+/** The team a STAFF user leads, or null (not a lead, or lead without a team). */
+function leadTeam(me: { role: UserRole; is_team_lead: boolean; team: string | null }): string | null {
+  const team = me.team?.trim();
+  return me.role === UserRole.STAFF && me.is_team_lead && team ? team : null;
+}
+
+function teamWhere(conjuntoId: string, team: string): Prisma.UserWhereInput {
+  return { conjunto_id: conjuntoId, role: UserRole.STAFF, team: { equals: team.trim(), mode: 'insensitive' } };
 }
 
 function parseCategory(value: string): PqrCategory {
