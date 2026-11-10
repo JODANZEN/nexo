@@ -1,3 +1,5 @@
+import { Throttle } from '@nestjs/throttler';
+import { PUBLIC_LINK_LIMIT_PER_MIN } from '../security/throttling';
 import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
 import { ClerkAuthGuard } from '../auth/clerk-auth.guard';
 import { CurrentUser } from '../auth/current-user.decorator';
@@ -46,11 +48,13 @@ export class EntryAuthorizationsController {
   }
 
   // One-time link from SMS/WhatsApp — no login. The 192-bit token is the credential.
+  @Throttle({ ip: { limit: PUBLIC_LINK_LIMIT_PER_MIN, ttl: 60_000 } })
   @Get('public/entry-authorizations/:token')
   publicView(@Param('token') token: string) {
     return this.entries.publicView(token);
   }
 
+  @Throttle({ ip: { limit: PUBLIC_LINK_LIMIT_PER_MIN, ttl: 60_000 } })
   @Post('public/entry-authorizations/:token')
   publicDecide(@Param('token') token: string, @Body() body: { approve: boolean; note?: string }) {
     return this.entries.publicDecide(token, body?.approve === true, body?.note);

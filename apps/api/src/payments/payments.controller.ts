@@ -1,3 +1,5 @@
+import { SkipThrottle } from '@nestjs/throttler';
+import { SKIP_ALL } from '../security/throttling';
 import {
   BadRequestException,
   Body,
@@ -85,6 +87,7 @@ export class PaymentsController {
   // PUBLIC — no ClerkAuthGuard. Checksum-verified (Wompi event signature), then
   // enqueued. Returns 200 immediately (Wompi has a ~5s timeout); reconciliation
   // runs in the processor.
+  @SkipThrottle(SKIP_ALL) // Wompi retries; never answer it with 429
   @Post('wompi/webhook')
   @HttpCode(200)
   async handleWompiWebhook(

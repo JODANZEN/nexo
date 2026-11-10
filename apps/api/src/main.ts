@@ -10,6 +10,8 @@ async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, { rawBody: true });
   // Unit / resident CSV imports (≈1,500 rows) exceed the 100 kb default.
   app.useBodyParser('json', { limit: '2mb' });
+  // Railway sits in front: take the client IP from the first X-Forwarded-For hop (rate limits).
+  app.set('trust proxy', 1);
 
   // Standard security headers (nosniff, frame-deny, HSTS, …). JSON API, so CSP is moot.
   app.use(helmet());

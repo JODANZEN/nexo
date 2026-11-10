@@ -34,6 +34,6 @@ new `apps/api/src/smoke-security.ts` regression smoke (12 checks, all pass).
 - **Wompi auto-charge** (`/v1/transactions` with `payment_source_id`) sends `customer_email: ''` and no integrity signature / acceptance token — verify against sandbox before turning on recurring payments.
 - **SLA is 24/7 calendar time**, not business hours, and only the resolution SLA escalates (first-response SLA is tracked but never alerts).
 - **Resident onboarding UX:** "Asignar residente" needs the resident's Clerk user id. The invite-by-phone endpoint exists but has no UI — needed before loading 300 City U residents.
-- **No rate limiting** on the API.
+- ~~No rate limiting~~ → **done** (`@nestjs/throttler`, `src/security/throttling.ts`): 600 req/min per IP + 300 req/min per Clerk user; one-time entry links 10/min per IP; `POST /pqrs` 30/min per user; `/health` and the Wompi webhook exempt; 429 in Spanish; `trust proxy` = 1 for Railway. In-memory store (single instance).
 - **Secrets:** `.env` holds `ENCRYPTION_KEY`/`VOTE_SECRET` again in comment lines, and `apps/web/.clerk/.tmp/keyless.json` holds a Clerk keyless secret. The repo zip with all secrets was copied around during recovery → rotate Clerk secret, R2 keys, Neon password and Groq key. **Do not rotate `ENCRYPTION_KEY`** without re-encrypting stored cédulas.
 - Mora collected is never persisted to `late_fee_amount` (only on the Payment amount) — Contabilidad reports under-report mora.

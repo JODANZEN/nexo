@@ -1,4 +1,7 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { throttlerOptions } from './security/throttling';
 import { BullModule } from '@nestjs/bullmq';
 import { ScheduleModule } from '@nestjs/schedule';
 import { PrismaModule } from './prisma/prisma.module';
@@ -34,6 +37,7 @@ import { IntegrationsModule } from './integrations/integrations.module';
   imports: [
     BullModule.forRoot({ connection: bullConnection() }),
     ScheduleModule.forRoot(),
+    ThrottlerModule.forRoot(throttlerOptions),
     IntegrationsModule,
     ClerkModule,
     PrismaModule,
@@ -59,6 +63,10 @@ import { IntegrationsModule } from './integrations/integrations.module';
     TraceabilityModule,
   ],
   controllers: [HealthController, MeController],
-  providers: [ClerkAuthGuard, FeatureGuard],
+  providers: [
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    ClerkAuthGuard,
+    FeatureGuard,
+  ],
 })
 export class AppModule {}

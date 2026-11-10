@@ -1,3 +1,5 @@
+import { Throttle } from '@nestjs/throttler';
+import { PQR_CREATE_LIMIT_PER_MIN } from '../security/throttling';
 import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { ClerkAuthGuard } from '../auth/clerk-auth.guard';
 import { CurrentUser } from '../auth/current-user.decorator';
@@ -14,6 +16,7 @@ import {
 export class PqrsController {
   constructor(private readonly pqrs: PqrsService) {}
 
+  @Throttle({ user: { limit: PQR_CREATE_LIMIT_PER_MIN, ttl: 60_000 } })
   @Post()
   create(@CurrentUser() user: AuthUser, @Body() dto: CreatePqrDto) {
     return this.pqrs.create(user, dto);
