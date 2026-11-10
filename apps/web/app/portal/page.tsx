@@ -20,6 +20,7 @@ import { Button } from '@/components/ui/button';
 import { BILLING_PHASE, PQR_CATEGORY, cop } from '@/lib/status-badges';
 import { ErrorState } from '@/components/ui/states';
 import { cn } from '@/lib/utils';
+import { InstallPrompt } from '@/components/install-prompt';
 
 interface Pqr {
   id: string;
@@ -83,6 +84,8 @@ export default function PortalInicio() {
   return (
     <div className="space-y-5">
       <h1 className="text-xl font-bold tracking-tight">Hola, {user?.firstName ?? 'Residente'} 👋</h1>
+
+      <InstallPrompt />
 
       {loadError ? <ErrorState error={loadError} /> : null}
 

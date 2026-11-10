@@ -12,6 +12,7 @@ import { PQR_STATUS } from '@/lib/status-badges';
 import { PRIORITY, slaState } from '@/lib/ticket-labels';
 import { PRIO_RANK, where, type Tarea } from '@/lib/tareas';
 import { cn } from '@/lib/utils';
+import { InstallPrompt } from '@/components/install-prompt';
 
 export default function TareasPage() {
   const api = useApi();
@@ -45,6 +46,8 @@ export default function TareasPage() {
             : 'Tus tareas asignadas'}
         </p>
       </div>
+
+      <InstallPrompt />
 
       <div className="grid grid-cols-2 rounded-xl bg-nexo-border/60 p-1 text-sm font-medium">
         {(['ACTIVE', 'RESOLVED'] as const).map((t) => (
