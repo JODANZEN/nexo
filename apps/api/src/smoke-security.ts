@@ -184,7 +184,9 @@ async function main(): Promise<void> {
     await rejects(() => onboarding.provision({ ...adminB, userId: 'random_user', conjuntoId: null, role: null }, { conjuntoId: cjB.id })),
   );
   const { InvitesService } = await import('./onboarding/invites.service');
-  const invites = new InvitesService(ps);
+  const { InviteMessenger } = await import('./onboarding/invite-messenger');
+  const { TwilioService } = await import('./integrations/twilio.service');
+  const invites = new InvitesService(ps, new InviteMessenger(ps, new TwilioService()));
   const adminBRow = await prisma.user.create({
     data: { conjunto_id: cjB.id, external_auth_id: 'admin_b', full_name: 'Admin B', phone: '+571', role: 'ADMIN' },
   });

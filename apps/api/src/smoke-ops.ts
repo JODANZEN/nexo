@@ -7,6 +7,7 @@ import { PrismaService } from './prisma/prisma.service';
 import { runAsTenant } from './tenancy/tenant-context';
 import { UnitsService } from './onboarding/units.service';
 import { InvitesService } from './onboarding/invites.service';
+import { InviteMessenger } from './onboarding/invite-messenger';
 import { OperationsService } from './pqrs/operations.service';
 import { RoutingService } from './pqrs/routing.service';
 import { EntryAuthorizationsService } from './pqrs/entry-authorizations.service';
@@ -55,7 +56,7 @@ async function main(): Promise<void> {
   await cleanup();
   const ps = new PrismaService();
   const units = new UnitsService(ps);
-  const invites = new InvitesService(ps);
+  const invites = new InvitesService(ps, new InviteMessenger(ps, new TwilioService()));
   const ops = new OperationsService(ps);
   const routing = new RoutingService(ps);
   const pqrs = makePqrsService(ps);

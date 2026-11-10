@@ -1,11 +1,13 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Loader2, Send, Upload, Users, X } from 'lucide-react';
+import { Check, Copy, Loader2, MessageCircle, Printer, RefreshCw, Send, Upload, Users, X } from 'lucide-react';
+import { inviteMessage, inviteSignInUrl, inviteWhatsAppLink } from '@nexo/types';
 import { useApi } from '@/lib/api';
 import { Card } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Dialog } from '@/components/ui/dialog';
 
 export interface PendingInvite {
@@ -17,6 +19,17 @@ export interface PendingInvite {
   unitNumber: string | null;
   occupancyType: string | null;
   createdAt: string;
+  inviteSentAt: string | null;
+}
+export interface InviteSettings {
+  conjuntoName: string;
+  /** true when the API sends the SMS/WhatsApp by itself (Twilio + APP_URL configured). */
+  automatic: boolean;
+  cooldownMinutes: number;
+}
+interface ResendResult {
+  sent: boolean;
+  reason?: 'not_configured';
 }
 interface BulkResult {
   row: number;
@@ -51,6 +64,16 @@ function errorText(err: unknown): string {
   }
 }
 
+function sentLabel(iso: string): string {
+  return new Date(iso).toLocaleString('es-CO', {
+    timeZone: 'America/Bogota',
+    day: 'numeric',
+    month: 'short',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
 /** Pending invitations + entry points to invite staff and bulk-load residents. */
 export function InvitesCard() {
   const api = useApi();
@@ -60,9 +83,43 @@ export function InvitesCard() {
     mutationFn: (id: string) => api.del(`/invites/${id}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['invites'] }),
   });
+  const settings = useQuery({
+    queryKey: ['invites', 'settings'],
+    queryFn: () => api.get<InviteSettings>('/invites/settings'),
+  });
+  // Per-row feedback for "Reenviar" / "Copiar" (which row, what to say).
+  const [note, setNote] = useState<{ id: string; text: string; error?: boolean } | null>(null);
+  const resend = useMutation({
+    mutationFn: (id: string) => api.post<ResendResult>(`/invites/${id}/resend`, {}),
+    onSuccess: (res, id) => {
+      setNote(
+        res.sent
+          ? { id, text: 'Mensaje enviado.' }
+          : { id, text: 'El envío automático aún no está activo. Compártela por WhatsApp.', error: true },
+      );
+      qc.invalidateQueries({ queryKey: ['invites'] });
+    },
+    onError: (err, id) => setNote({ id, text: errorText(err), error: true }),
+  });
   const [teamOpen, setTeamOpen] = useState(false);
   const [bulkOpen, setBulkOpen] = useState(false);
   const list = invites.data ?? [];
+
+  // Same text the API sends, pointing at this site's sign-in.
+  const [origin, setOrigin] = useState('');
+  useEffect(() => setOrigin(window.location.origin), []);
+  const message = settings.data && origin ? inviteMessage(settings.data.conjuntoName, inviteSignInUrl(origin)) : null;
+  const automatic = settings.data?.automatic ?? false;
+
+  async function copy(id: string) {
+    if (!message) return;
+    try {
+      await navigator.clipboard.writeText(message);
+      setNote({ id, text: 'Mensaje copiado.' });
+    } catch {
+      setNote({ id, text: 'No se pudo copiar. Usa el enlace de WhatsApp.', error: true });
+    }
+  }
 
   return (
     <Card className="p-5">
@@ -72,8 +129,18 @@ export function InvitesCard() {
           <p className="text-xs text-nexo-muted">
             La persona entra con su celular (código por SMS) y su cuenta queda conectada sola.
           </p>
+          {settings.data ? (
+            <p className="mt-1 text-xs text-nexo-muted">
+              {automatic
+                ? 'Al invitar, le llega un mensaje con el enlace para entrar.'
+                : 'El mensaje automático aún no está activo: comparte cada invitación por WhatsApp o imprime el afiche.'}
+            </p>
+          ) : null}
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          <Link href="/dashboard/propiedades/afiche" className={buttonVariants({ variant: 'outline', size: 'sm' })}>
+            <Printer className="h-4 w-4" /> Afiche con QR
+          </Link>
           <Button size="sm" variant="outline" onClick={() => setTeamOpen(true)}>
             <Users className="h-4 w-4" /> Invitar equipo
           </Button>
@@ -90,23 +157,73 @@ export function InvitesCard() {
       ) : (
         <ul className="mt-3 max-h-72 divide-y divide-nexo-border overflow-auto rounded-lg border border-nexo-border">
           {list.map((i) => (
-            <li key={i.id} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
-              <div className="min-w-0">
-                <span className="font-medium">{i.fullName}</span>
-                <span className="ml-2 text-xs text-nexo-muted">
-                  {i.phone} · {ROLE_LABEL[i.role]}
-                  {i.team ? ` (${i.team})` : ''}
-                  {i.unitNumber ? ` · Unidad ${i.unitNumber}` : ''}
-                  {i.occupancyType ? ` · ${OCC_LABEL[i.occupancyType] ?? i.occupancyType}` : ''}
-                </span>
+            <li key={i.id} className="px-3 py-2 text-sm">
+              <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                <div className="min-w-0">
+                  <span className="font-medium">{i.fullName}</span>
+                  <span className="ml-2 text-xs text-nexo-muted">
+                    {i.phone} · {ROLE_LABEL[i.role]}
+                    {i.team ? ` (${i.team})` : ''}
+                    {i.unitNumber ? ` · Unidad ${i.unitNumber}` : ''}
+                    {i.occupancyType ? ` · ${OCC_LABEL[i.occupancyType] ?? i.occupancyType}` : ''}
+                    {i.inviteSentAt ? ` · Mensaje enviado ${sentLabel(i.inviteSentAt)}` : ''}
+                  </span>
+                </div>
+                <div className="flex shrink-0 items-center gap-3 text-xs">
+                  {message ? (
+                    <>
+                      <a
+                        href={inviteWhatsAppLink(i.phone, message)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-nexo-teal hover:underline"
+                        aria-label={`Enviar invitación por WhatsApp a ${i.fullName}`}
+                      >
+                        <MessageCircle className="h-3.5 w-3.5" /> WhatsApp
+                      </a>
+                      <button
+                        onClick={() => copy(i.id)}
+                        className="inline-flex items-center gap-1 text-nexo-muted hover:text-nexo-text"
+                        aria-label={`Copiar mensaje de invitación para ${i.fullName}`}
+                      >
+                        {note?.id === i.id && note.text === 'Mensaje copiado.' ? (
+                          <Check className="h-3.5 w-3.5" />
+                        ) : (
+                          <Copy className="h-3.5 w-3.5" />
+                        )}{' '}
+                        Copiar
+                      </button>
+                    </>
+                  ) : null}
+                  {automatic ? (
+                    <button
+                      onClick={() => resend.mutate(i.id)}
+                      disabled={resend.isPending}
+                      className="inline-flex items-center gap-1 text-nexo-muted hover:text-nexo-text disabled:opacity-50"
+                      aria-label={`Reenviar invitación a ${i.fullName}`}
+                    >
+                      {resend.isPending && resend.variables === i.id ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <RefreshCw className="h-3.5 w-3.5" />
+                      )}{' '}
+                      Reenviar
+                    </button>
+                  ) : null}
+                  <button
+                    onClick={() => revoke.mutate(i.id)}
+                    className="text-nexo-faint hover:text-red-600"
+                    aria-label={`Cancelar invitación de ${i.fullName}`}
+                  >
+                    Cancelar
+                  </button>
+                </div>
               </div>
-              <button
-                onClick={() => revoke.mutate(i.id)}
-                className="text-xs text-nexo-faint hover:text-red-600"
-                aria-label={`Cancelar invitación de ${i.fullName}`}
-              >
-                Cancelar
-              </button>
+              {note?.id === i.id ? (
+                <p role="status" className={`mt-1 text-xs ${note.error ? 'text-red-600' : 'text-nexo-teal'}`}>
+                  {note.text}
+                </p>
+              ) : null}
             </li>
           ))}
         </ul>
