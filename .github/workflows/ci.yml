@@ -51,10 +51,10 @@ jobs:
           npm run db:deploy -w @nexo/database
           echo "DATABASE_URL=$DATABASE_URL" > packages/database/.env
           npm run db:seed -w @nexo/database
-      - name: Smoke tests (billing, PQR, portería, asambleas, security, RLS)
+      - name: Smoke tests (billing, PQR, portería, asambleas, security, RLS, operations, areas)
         working-directory: apps/api
         run: |
-          for s in smoke smoke-phase4 smoke-phase5 smoke-phase6 smoke-security smoke-rls smoke-ops smoke-invites; do
+          for s in smoke smoke-phase4 smoke-phase5 smoke-phase6 smoke-security smoke-rls smoke-ops smoke-invites smoke-areas; do
             echo "::group::$s"; node dist/$s.js; echo "::endgroup::"
           done
       - name: Dependency audit

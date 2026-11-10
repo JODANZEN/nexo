@@ -9,6 +9,8 @@ import { NotificationsBell } from '@/components/dashboard/notifications-bell';
 const ROLE_LABEL: Record<string, string> = {
   ADMIN: 'Administrador',
   RESIDENT: 'Residente',
+  GUARD: 'Portería',
+  STAFF: 'Personal',
 };
 
 export function Topbar() {
@@ -19,12 +21,13 @@ export function Topbar() {
     '';
   const role = user?.publicMetadata?.role as string | undefined;
   const roleLabel = role ? ROLE_LABEL[role] ?? 'Usuario' : 'Usuario';
+  const isGuard = role === 'GUARD'; // guards only work in Portería: no links elsewhere
 
   return (
     <header className="sticky top-0 z-10 border-b border-nexo-border bg-white">
       {/* Mobile header: logo + notifications */}
       <div className="flex items-center justify-between px-4 py-3 md:hidden">
-        <Link href="/dashboard" className="text-nexo-navy">
+        <Link href={isGuard ? '/dashboard/porteria' : '/dashboard'} className="text-nexo-navy">
           <NexoLogo />
         </Link>
         <NotificationsBell />
@@ -45,6 +48,7 @@ export function Topbar() {
         </label>
 
         <div className="ml-auto flex items-center gap-2">
+          {isGuard ? null : (
           <Link
             href="/dashboard/iris"
             className="flex h-9 w-9 items-center justify-center rounded-lg text-nexo-muted hover:bg-nexo-bg"
@@ -53,6 +57,7 @@ export function Topbar() {
           >
             <MessageSquare className="h-5 w-5" />
           </Link>
+          )}
           <NotificationsBell />
 
           <div className="ml-2 flex items-center gap-2 border-l border-nexo-border pl-3">

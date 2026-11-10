@@ -35,6 +35,7 @@ interface Member {
   name: string;
   role: string;
   team: string | null;
+  isTeamLead: boolean;
   pending: boolean;
   openTickets: number;
 }
@@ -247,6 +248,11 @@ function TeamCard() {
     mutationFn: (v: { id: string; team: string }) => api.patch(`/operations/team/${v.id}`, { team: v.team || null }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['operations', 'team'] }),
   });
+  const setLead = useMutation({
+    mutationFn: (v: { id: string; isTeamLead: boolean }) =>
+      api.patch(`/operations/team/${v.id}/lead`, { isTeamLead: v.isTeamLead }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['operations', 'team'] }),
+  });
   return (
     <Card className="p-5">
       <h2 className="flex items-center gap-2 text-base font-semibold tracking-tight">
@@ -254,6 +260,7 @@ function TeamCard() {
       </h2>
       <p className="text-xs text-nexo-muted">
         Invita personal desde Propiedades → Invitaciones → “Invitar equipo”. Cada persona ve sus tareas en el celular.
+        El jefe de área ve además las solicitudes de todo su equipo y puede reasignarlas dentro de él.
       </p>
       {team.isLoading ? (
         <div className="mt-3">
@@ -275,18 +282,34 @@ function TeamCard() {
                 </span>
               </div>
               {m.role === 'STAFF' ? (
-                <input
-                  defaultValue={m.team ?? ''}
-                  placeholder="Equipo"
-                  onBlur={(e) => e.target.value !== (m.team ?? '') && setTeam.mutate({ id: m.id, team: e.target.value })}
-                  className={cn(inputCls, 'w-40')}
-                  aria-label={`Equipo de ${m.name}`}
-                />
+                <div className="flex items-center gap-3">
+                  <label
+                    className={cn('flex items-center gap-1.5 text-xs', m.team ? 'text-nexo-text' : 'text-nexo-faint')}
+                    title={m.team ? undefined : 'Primero asígnale un equipo'}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={m.isTeamLead}
+                      disabled={setLead.isPending || (!m.team && !m.isTeamLead)}
+                      onChange={(e) => setLead.mutate({ id: m.id, isTeamLead: e.target.checked })}
+                      aria-label={`${m.name} es jefe de área`}
+                    />
+                    Jefe de área
+                  </label>
+                  <input
+                    defaultValue={m.team ?? ''}
+                    placeholder="Equipo"
+                    onBlur={(e) => e.target.value !== (m.team ?? '') && setTeam.mutate({ id: m.id, team: e.target.value })}
+                    className={cn(inputCls, 'w-40')}
+                    aria-label={`Equipo de ${m.name}`}
+                  />
+                </div>
               ) : null}
             </li>
           ))}
         </ul>
       )}
+      {setLead.isError ? <p className="mt-2 text-xs text-red-600">{apiMessage(setLead.error)}</p> : null}
     </Card>
   );
 }

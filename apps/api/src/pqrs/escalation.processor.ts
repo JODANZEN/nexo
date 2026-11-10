@@ -150,5 +150,39 @@ export class EscalationProcessor extends WorkerHost {
         link: `/dashboard/solicitudes/${pqr.id}`,
       });
     }
+    await this.notifyTeamLeads(pqr, title);
+  }
+
+  // The jefe(s) de área of the assignee's team hear about it together with the admins.
+  private async notifyTeamLeads(pqr: Pqr, title: string): Promise<void> {
+    if (!pqr.assigned_to_id) return;
+    const assignee = await this.prisma.db.user.findUnique({
+      where: { id: pqr.assigned_to_id },
+      select: { role: true, team: true },
+    });
+    const team = assignee?.team?.trim();
+    if (assignee?.role !== UserRole.STAFF || !team) return;
+    const leads = await this.prisma.db.user.findMany({
+      where: {
+        conjunto_id: pqr.conjunto_id,
+        role: UserRole.STAFF,
+        is_team_lead: true,
+        is_active: true,
+        team: { equals: team, mode: 'insensitive' },
+        id: { not: pqr.assigned_to_id }, // a lead holding the ticket was already nudged as assignee
+      },
+      select: { id: true },
+    });
+    for (const l of leads) {
+      await this.notifications.notifyUser({
+        conjuntoId: pqr.conjunto_id,
+        userId: l.id,
+        type: 'pqr.escalation',
+        title,
+        entityType: 'Pqr',
+        entityId: pqr.id,
+        link: `/tareas/${pqr.id}`,
+      });
+    }
   }
 }
