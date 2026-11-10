@@ -14,13 +14,14 @@ export class TwilioService {
     return !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN);
   }
 
-  // Try WhatsApp first, fall back to SMS. Returns silently if unconfigured.
-  async send(to: string, body: string): Promise<void> {
-    if (!this.configured || !to) return;
+  // Try WhatsApp first, fall back to SMS. No-op if unconfigured.
+  // Resolves true only when Twilio accepted the message on some channel.
+  async send(to: string, body: string): Promise<boolean> {
+    if (!this.configured || !to) return false;
     const wa = process.env.TWILIO_WHATSAPP_FROM;
-    if (wa && (await this.post(`whatsapp:${wa}`, `whatsapp:${to}`, body))) return;
+    if (wa && (await this.post(`whatsapp:${wa}`, `whatsapp:${to}`, body))) return true;
     const sms = process.env.TWILIO_SMS_FROM;
-    if (sms) await this.post(sms, to, body);
+    return sms ? this.post(sms, to, body) : false;
   }
 
   private async post(from: string, to: string, body: string): Promise<boolean> {

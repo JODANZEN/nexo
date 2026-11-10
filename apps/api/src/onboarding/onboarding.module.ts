@@ -6,10 +6,11 @@ import { UnitsController } from './units.controller';
 import { InvitesController } from './invites.controller';
 import { InvitesService } from './invites.service';
 import { UnitsService } from './units.service';
+import { InviteMessenger } from './invite-messenger';
 
 @Module({
   controllers: [ConjuntosController, UsersController, UnitsController, InvitesController],
-  providers: [OnboardingService, InvitesService, UnitsService],
+  providers: [OnboardingService, InvitesService, InviteMessenger, UnitsService],
   exports: [UnitsService],
 })
 export class OnboardingModule {}
